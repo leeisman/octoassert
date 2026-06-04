@@ -16,10 +16,15 @@ func (s *Server) handleBuilderRunStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var step testcase.Step
-	if err := json.NewDecoder(r.Body).Decode(&step); err != nil {
+	var req struct {
+		testcase.Step
+		TimeoutMS int `json:"timeout_ms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	step = req.Step
 	if step.StepID == "" {
 		step.StepID = "preview"
 	}
@@ -28,7 +33,11 @@ func (s *Server) handleBuilderRunStep(w http.ResponseWriter, r *http.Request) {
 		Name:  "Builder Preview",
 		Steps: []testcase.Step{step},
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	timeout := 30 * time.Second
+	if req.TimeoutMS > 0 {
+		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	result := s.runner.Run(ctx, tc)
 	if len(result.Steps) == 0 {

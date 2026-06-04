@@ -51,6 +51,27 @@ func TestDeleteCategoryRejectsUnsafePath(t *testing.T) {
 	}
 }
 
+func TestDuplicateCreatesCopyInSameCategory(t *testing.T) {
+	root := t.TempDir()
+	writeCase(t, root, "alpha/sample.json", "sample")
+	writeCase(t, root, "alpha/sample-copy.json", "sample-copy")
+
+	cat := New(root)
+	dup, err := cat.Duplicate("sample", "alpha")
+	if err != nil {
+		t.Fatalf("Duplicate() error = %v", err)
+	}
+	if dup.ID != "sample-copy-2" {
+		t.Fatalf("duplicate ID = %q, want sample-copy-2", dup.ID)
+	}
+	if dup.Category != "alpha" {
+		t.Fatalf("duplicate category = %q, want alpha", dup.Category)
+	}
+	if _, err := os.Stat(filepath.Join(root, "alpha", "sample-copy-2.json")); err != nil {
+		t.Fatalf("duplicate file missing: %v", err)
+	}
+}
+
 func writeCase(t *testing.T, root, relPath, id string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(relPath))

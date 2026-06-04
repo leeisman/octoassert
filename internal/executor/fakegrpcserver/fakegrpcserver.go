@@ -3,19 +3,19 @@ package fakegrpcserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
 	"github.com/jhump/protoreflect/dynamic"
+	"github.com/jhump/protoreflect/grpcreflect"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -86,7 +86,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	return res
 }
 
-func executeStart(_ context.Context, step testcase.Step, res *runner.StepResult) error {
+func executeStart(ctx context.Context, step testcase.Step, res *runner.StepResult) error {
 	action, err := runner.DecodeAction[StartAction](step)
 	if err != nil {
 		return err
@@ -178,10 +178,6 @@ func executeStart(_ context.Context, step testcase.Step, res *runner.StepResult)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", action.Port))
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
-			res.ResponseSummary = fmt.Sprintf(`{"addr":"%s","reused_external":true}`, addr)
-			return nil
-		}
 		return fmt.Errorf("failed to listen on port %d: %w", action.Port, err)
 	}
 
@@ -191,7 +187,33 @@ func executeStart(_ context.Context, step testcase.Step, res *runner.StepResult)
 
 	go srv.Serve(lis)
 
+	if err := waitForReflection(ctx, addr); err != nil {
+		stopServer(srv)
+		poolMu.Lock()
+		delete(pool, addr)
+		poolMu.Unlock()
+		return err
+	}
+
 	res.ResponseSummary = fmt.Sprintf(`{"addr":"%s"}`, addr)
+	return nil
+}
+
+func waitForReflection(ctx context.Context, addr string) error {
+	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("failed to create readiness client: %w", err)
+	}
+	defer conn.Close()
+
+	refClient := grpcreflect.NewClientAuto(readyCtx, conn)
+	defer refClient.Reset()
+	if _, err := refClient.ListServices(); err != nil {
+		return fmt.Errorf("fake grpc server not ready for reflection: %w", err)
+	}
 	return nil
 }
 

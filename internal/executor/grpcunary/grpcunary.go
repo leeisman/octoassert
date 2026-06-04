@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/desc/protoparse"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
 	"github.com/jhump/protoreflect/grpcreflect"
@@ -22,11 +23,12 @@ import (
 )
 
 type Action struct {
-	Endpoint string            `json:"endpoint"`
-	Service  string            `json:"service"`
-	Method   string            `json:"method"`
-	Metadata map[string]string `json:"metadata"`
-	Payload  json.RawMessage   `json:"payload"`
+	Endpoint   string            `json:"endpoint"`
+	Service    string            `json:"service"`
+	Method     string            `json:"method"`
+	Metadata   map[string]string `json:"metadata"`
+	ProtoFiles []string          `json:"proto_files"`
+	Payload    json.RawMessage   `json:"payload"`
 }
 
 type Executor struct{}
@@ -47,12 +49,16 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 		StartedAt: started,
 		Status:    runner.StatusPassed,
 	}
+	finish := func() {
+		res.FinishedAt = time.Now()
+		res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()
+	}
 
 	action, err := runner.DecodeAction[Action](step)
 	if err != nil {
 		res.Status = runner.StatusFailed
 		res.Error = "invalid action payload: " + err.Error()
-		res.FinishedAt = time.Now()
+		finish()
 		return res
 	}
 
@@ -63,29 +69,30 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	if err != nil {
 		res.Status = runner.StatusFailed
 		res.Error = "failed to dial endpoint: " + err.Error()
-		res.FinishedAt = time.Now()
+		finish()
 		return res
 	}
 	defer conn.Close()
 
 	// 2. Setup Reflection Client
-	refCtx := context.Background()
+	refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer refCancel()
 	refClient := grpcreflect.NewClientAuto(refCtx, conn)
 	defer refClient.Reset()
 
 	// 3. Resolve Service and Method
-	svcDesc, err := resolveService(refClient, action.Service)
+	svcDesc, err := resolveService(refClient, action.Service, action.ProtoFiles)
 	if err != nil {
 		res.Status = runner.StatusFailed
 		res.Error = fmt.Sprintf("failed to resolve service %s: %v", action.Service, err)
-		res.FinishedAt = time.Now()
+		finish()
 		return res
 	}
 	mtdDesc := svcDesc.FindMethodByName(action.Method)
 	if mtdDesc == nil {
 		res.Status = runner.StatusFailed
 		res.Error = fmt.Sprintf("method %s not found in service %s", action.Method, action.Service)
-		res.FinishedAt = time.Now()
+		finish()
 		return res
 	}
 
@@ -96,7 +103,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 		if err != nil {
 			res.Status = runner.StatusFailed
 			res.Error = "failed to parse JSON payload into protobuf: " + err.Error()
-			res.FinishedAt = time.Now()
+			finish()
 			return res
 		}
 	}
@@ -109,8 +116,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	stub := grpcdynamic.NewStub(conn)
 	respMsg, rpcErr := stub.InvokeRpc(outCtx, mtdDesc, reqMsg)
 
-	res.FinishedAt = time.Now()
-	res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()
+	finish()
 
 	// 7. Process Response and Errors
 	responseBody := map[string]any{}
@@ -169,20 +175,61 @@ func writeResponseSummary(res *runner.StepResult, body map[string]any) {
 	res.ResponseSummary = string(payload)
 }
 
-func resolveService(refClient *grpcreflect.Client, service string) (*desc.ServiceDescriptor, error) {
-	svcDesc, err := refClient.ResolveService(service)
-	if err == nil {
-		return svcDesc, nil
+func resolveService(refClient *grpcreflect.Client, service string, protoFiles []string) (*desc.ServiceDescriptor, error) {
+	services, listErr := refClient.ListServices()
+	if listErr == nil {
+		for _, candidate := range services {
+			if candidate == service || strings.HasSuffix(candidate, "."+service) {
+				return refClient.ResolveService(candidate)
+			}
+		}
+		if svcDesc, err := refClient.ResolveService(service); err == nil {
+			return svcDesc, nil
+		} else if len(protoFiles) == 0 {
+			return nil, err
+		}
+	} else if len(protoFiles) == 0 {
+		return nil, listErr
 	}
 
-	services, listErr := refClient.ListServices()
-	if listErr != nil {
-		return nil, err
+	svcDesc, protoErr := resolveServiceFromProtoFiles(service, protoFiles)
+	if protoErr != nil {
+		if listErr != nil {
+			return nil, fmt.Errorf("%v; proto fallback failed: %w", listErr, protoErr)
+		}
+		return nil, protoErr
 	}
-	for _, candidate := range services {
-		if candidate == service || strings.HasSuffix(candidate, "."+service) {
-			return refClient.ResolveService(candidate)
+	return svcDesc, nil
+}
+
+func resolveServiceFromProtoFiles(service string, protoFiles []string) (*desc.ServiceDescriptor, error) {
+	parser := protoparse.Parser{
+		ImportPaths:           []string{".", ".."},
+		InferImportPaths:      true,
+		IncludeSourceCodeInfo: false,
+	}
+	fds, err := parser.ParseFiles(protoFiles...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proto_files: %w", err)
+	}
+	for _, fd := range fds {
+		if svcDesc := findService(fd, service); svcDesc != nil {
+			return svcDesc, nil
 		}
 	}
-	return nil, err
+	return nil, fmt.Errorf("service not found in proto_files: %s", service)
+}
+
+func findService(fd *desc.FileDescriptor, service string) *desc.ServiceDescriptor {
+	for _, svc := range fd.GetServices() {
+		if svc.GetFullyQualifiedName() == service || svc.GetName() == service || strings.HasSuffix(svc.GetFullyQualifiedName(), "."+service) {
+			return svc
+		}
+	}
+	for _, dep := range fd.GetDependencies() {
+		if svc := findService(dep, service); svc != nil {
+			return svc
+		}
+	}
+	return nil
 }

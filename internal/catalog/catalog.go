@@ -48,12 +48,16 @@ func (c *Catalog) List() ([]testcase.TestCase, error) {
 }
 
 func (c *Catalog) Get(id string) (testcase.TestCase, error) {
+	return c.GetInCategory(id, "")
+}
+
+func (c *Catalog) GetInCategory(id, category string) (testcase.TestCase, error) {
 	cases, err := c.List()
 	if err != nil {
 		return testcase.TestCase{}, err
 	}
 	for _, tc := range cases {
-		if tc.ID == id {
+		if tc.ID == id && (category == "" || tc.Category == category) {
 			return tc, nil
 		}
 	}
@@ -87,16 +91,46 @@ func (c *Catalog) load(path string) (testcase.TestCase, error) {
 // Delete removes the JSON file for the given test case ID.
 // If category is set, it is used to disambiguate duplicate IDs.
 func (c *Catalog) Delete(id, category string) error {
-	cases, err := c.List()
+	tc, err := c.GetInCategory(id, category)
 	if err != nil {
 		return err
 	}
-	for _, tc := range cases {
-		if tc.ID == id && (category == "" || tc.Category == category) {
-			return os.Remove(tc.SourcePath)
+	return os.Remove(tc.SourcePath)
+}
+
+// Duplicate copies a test case within its category and returns the new case.
+func (c *Catalog) Duplicate(id, category string) (testcase.TestCase, error) {
+	tc, err := c.GetInCategory(id, category)
+	if err != nil {
+		return testcase.TestCase{}, err
+	}
+	cases, err := c.List()
+	if err != nil {
+		return testcase.TestCase{}, err
+	}
+	ids := make(map[string]struct{}, len(cases))
+	for _, item := range cases {
+		if item.Category == tc.Category {
+			ids[item.ID] = struct{}{}
 		}
 	}
-	return fmt.Errorf("test case not found: %s", id)
+
+	base := tc.ID + "-copy"
+	newID := base
+	for i := 2; ; i++ {
+		if _, ok := ids[newID]; !ok {
+			break
+		}
+		newID = fmt.Sprintf("%s-%d", base, i)
+	}
+
+	tc.ID = newID
+	tc.Name = tc.Name + " Copy"
+	tc.SourcePath = ""
+	if err := c.Save(tc, tc.Category); err != nil {
+		return testcase.TestCase{}, err
+	}
+	return c.GetInCategory(newID, tc.Category)
 }
 
 // DeleteCategory removes a category directory under the catalog root.

@@ -1,6 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
   const layout = document.getElementById('layout');
   const catalogToggle = document.getElementById('catalog-toggle');
+  const catalogSelectBtn = document.getElementById('catalog-select-btn');
+  const catalogSelectBar = document.getElementById('catalog-select-bar');
+  const catalogSelectedCount = document.getElementById('catalog-selected-count');
+  const catalogDeleteSelected = document.getElementById('catalog-delete-selected');
+  const catalogCancelSelect = document.getElementById('catalog-cancel-select');
   const treeContainer = document.getElementById('tree');
   const btnRun = document.getElementById('btn-run');
   const currentTestTitle = document.getElementById('current-test-title');
@@ -19,6 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentTestCaseCategory = null;
   let currentRunResult = null;
   let currentTestCase = null;
+  let catalogSelectMode = false;
+  let selectedCatalogItems = new Map();
 
   // Initialize
   initializeCatalogToggle();
@@ -28,6 +35,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnRun.addEventListener('click', executeTestCase);
   btnEditBuilder.addEventListener('click', () => { if (currentTestCase) window.loadInBuilder?.(currentTestCase); });
+  catalogSelectBtn.addEventListener('click', () => setCatalogSelectMode(!catalogSelectMode));
+  catalogCancelSelect.addEventListener('click', () => setCatalogSelectMode(false));
+  catalogDeleteSelected.addEventListener('click', deleteSelectedTestCases);
 
   function initializeCatalogToggle() {
     const collapsed = localStorage.getItem('catalogCollapsed') === 'true';
@@ -84,6 +94,105 @@ document.addEventListener('DOMContentLoaded', () => {
       overlay.onclick = e => { if (e.target === overlay) done(false); };
     });
   };
+
+  initFilePicker();
+
+  function initFilePicker() {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="oa-file-overlay" class="oa-modal-overlay oa-file-overlay" style="display:none">
+        <div class="oa-file-modal glass-panel">
+          <div class="oa-file-head">
+            <div>
+              <div class="oa-modal-title">Select Proto File</div>
+              <div class="oa-file-subtitle">Choose a .proto file readable by the OctoAssert server.</div>
+            </div>
+            <button id="oa-file-close" class="icon-btn" type="button" title="Close">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="oa-file-path-row">
+            <button id="oa-file-up" class="btn btn-sm" type="button">Up</button>
+            <input id="oa-file-path" class="exp-input" autocomplete="off">
+            <button id="oa-file-go" class="btn btn-accent btn-sm" type="button">Go</button>
+          </div>
+          <div id="oa-file-list" class="oa-file-list"></div>
+          <div id="oa-file-msg" class="oa-file-msg"></div>
+        </div>
+      </div>
+    `);
+  }
+
+  async function openProtoPicker(s, card) {
+    const overlay = document.getElementById('oa-file-overlay');
+    const pathInput = document.getElementById('oa-file-path');
+    const listEl = document.getElementById('oa-file-list');
+    const msgEl = document.getElementById('oa-file-msg');
+    const close = () => { overlay.style.display = 'none'; };
+    let currentPath = firstProtoDir(s.protoFiles) || '';
+    let parentPath = '';
+
+    async function load(path = '') {
+      msgEl.textContent = '';
+      listEl.innerHTML = '<div class="oa-file-empty">Loading...</div>';
+      try {
+        const url = path ? `/api/files/browse?path=${encodeURIComponent(path)}` : '/api/files/browse';
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        currentPath = data.path || '';
+        parentPath = data.parent || '';
+        pathInput.value = currentPath;
+        render(data.entries || []);
+      } catch (err) {
+        listEl.innerHTML = '<div class="oa-file-empty">Unable to open this path.</div>';
+        msgEl.textContent = err.message;
+      }
+    }
+
+    function render(entries) {
+      if (!entries.length) {
+        listEl.innerHTML = '<div class="oa-file-empty">No folders or .proto files here.</div>';
+        return;
+      }
+      listEl.innerHTML = entries.map(entry => `
+        <button class="oa-file-item ${entry.type === 'dir' ? 'is-dir' : 'is-file'}" type="button" data-path="${X(entry.path)}" data-rel-path="${X(entry.rel_path || entry.path)}" data-type="${X(entry.type)}">
+          <span class="oa-file-kind">${entry.type === 'dir' ? 'DIR' : 'PROTO'}</span>
+          <span class="oa-file-name">${X(entry.name)}</span>
+        </button>
+      `).join('');
+      listEl.querySelectorAll('.oa-file-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const path = btn.dataset.path;
+          if (btn.dataset.type === 'dir') load(path);
+          else selectProto(btn.dataset.relPath || path);
+        });
+      });
+    }
+
+    function selectProto(path) {
+      const existing = s.protoFiles.split(',').map(p => p.trim()).filter(Boolean);
+      if (!existing.includes(path)) existing.push(path);
+      s.protoFiles = existing.join(', ');
+      const input = card.querySelector('.bldr-protos-in');
+      if (input) input.value = s.protoFiles;
+      close();
+    }
+
+    document.getElementById('oa-file-close').onclick = close;
+    document.getElementById('oa-file-up').onclick = () => { if (parentPath) load(parentPath); };
+    document.getElementById('oa-file-go').onclick = () => load(pathInput.value.trim());
+    pathInput.onkeydown = e => { if (e.key === 'Enter') load(pathInput.value.trim()); };
+    overlay.onclick = e => { if (e.target === overlay) close(); };
+    overlay.style.display = 'flex';
+    await load(currentPath);
+  }
+
+  function firstProtoDir(value) {
+    const first = (value || '').split(',').map(p => p.trim()).find(Boolean);
+    if (!first) return '';
+    const slash = Math.max(first.lastIndexOf('/'), first.lastIndexOf('\\'));
+    return slash > 0 ? first.slice(0, slash) : '';
+  }
 
   async function fetchTestCases() {
     try {
@@ -152,24 +261,37 @@ document.addEventListener('DOMContentLoaded', () => {
         node.__cases.forEach(tc => {
           const item = document.createElement('div');
           item.className = 'test-case-item';
+          item.classList.toggle('catalog-selecting', catalogSelectMode);
+          item.classList.toggle('selected', selectedCatalogItems.has(catalogItemKey(tc)));
           item.innerHTML = `
+            <label class="tc-select-wrap" title="Select test case">
+              <input class="tc-select-check" type="checkbox"${selectedCatalogItems.has(catalogItemKey(tc)) ? ' checked' : ''}>
+            </label>
             <div class="tc-text">
               <div class="tc-name"></div>
               <div class="tc-id"></div>
             </div>
-            <button class="tc-delete-btn" type="button" title="Delete test case" aria-label="Delete test case">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            <button class="tc-more-btn" type="button" title="Actions" aria-label="Test case actions">
+              <svg viewBox="0 0 24 24" fill="currentColor" class="icon"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
             </button>
           `;
           item.querySelector('.tc-name').textContent = tc.name;
           item.querySelector('.tc-id').textContent = tc.id;
           item.onclick = e => {
-            if (e.target.closest('.tc-delete-btn')) return;
+            if (e.target.closest('.tc-more-btn') || e.target.closest('.tc-select-wrap')) return;
+            if (catalogSelectMode) {
+              toggleCatalogItem(tc);
+              return;
+            }
             selectTestCase(tc.id, tc.name, item, tc.category);
           };
-          item.querySelector('.tc-delete-btn').onclick = e => {
+          item.querySelector('.tc-select-check').onchange = e => {
             e.stopPropagation();
-            deleteTestCase(tc);
+            toggleCatalogItem(tc, e.target.checked);
+          };
+          item.querySelector('.tc-more-btn').onclick = e => {
+            e.stopPropagation();
+            showContextMenu(e, tc, item);
           };
           item.addEventListener('contextmenu', e => { e.preventDefault(); showContextMenu(e, tc, item); });
           childrenDiv.appendChild(item);
@@ -191,6 +313,57 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function setCatalogSelectMode(enabled) {
+    catalogSelectMode = enabled;
+    if (!enabled) selectedCatalogItems.clear();
+    catalogSelectBar.style.display = enabled ? 'flex' : 'none';
+    treeContainer.classList.toggle('catalog-select-mode', enabled);
+    updateCatalogSelectionUI();
+    fetchTestCases();
+  }
+
+  function catalogItemKey(tc) {
+    return `${tc.category || ''}\u0000${tc.id}`;
+  }
+
+  function toggleCatalogItem(tc, checked = !selectedCatalogItems.has(catalogItemKey(tc))) {
+    const key = catalogItemKey(tc);
+    if (checked) selectedCatalogItems.set(key, { id: tc.id, category: tc.category || '' });
+    else selectedCatalogItems.delete(key);
+    updateCatalogSelectionUI();
+    fetchTestCases();
+  }
+
+  function updateCatalogSelectionUI() {
+    const count = selectedCatalogItems.size;
+    catalogSelectedCount.textContent = `${count} selected`;
+    catalogDeleteSelected.disabled = count === 0;
+  }
+
+  async function deleteSelectedTestCases() {
+    const items = [...selectedCatalogItems.values()];
+    if (!items.length) return;
+    if (!await showConfirm('刪除 Test Cases', `確定刪除已選取的 ${items.length} 個 test cases？\n此操作不可復原。`)) return;
+    try {
+      const res = await fetch('/api/testcases/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || '刪除失敗');
+        return;
+      }
+      if (items.some(item => item.id === currentTestCaseId && (!currentTestCaseCategory || item.category === currentTestCaseCategory))) {
+        clearSelection();
+      }
+      setCatalogSelectMode(false);
+    } catch (err) {
+      alert('刪除失敗：' + err.message);
+    }
+  }
+
   async function deleteFolder(category) {
     if (!category || category === 'uncategorized') return;
     if (!await showConfirm('刪除資料夾', `確定刪除「${category}」資料夾？\n資料夾內所有 test cases 都會被刪除，此操作不可復原。`)) return;
@@ -210,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // ── Right-click context menu ──
+  // ── Catalog item menu ──
   function initContextMenu() {
     const menu = document.getElementById('tc-context-menu');
     // Close on any click outside
@@ -227,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
     menu.style.left = x + 'px';
     menu.style.top  = y + 'px';
     // Wire up actions
-      menu.querySelector('.ctx-run').onclick = () => {
+    menu.querySelector('.ctx-run').onclick = () => {
       menu.style.display = 'none';
       selectTestCase(tc.id, tc.name, item, tc.category);
       // wait for definition to load then run
@@ -236,7 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 80);
       setTimeout(() => clearInterval(wait), 5000);
     };
-      menu.querySelector('.ctx-edit').onclick = () => {
+    menu.querySelector('.ctx-edit').onclick = () => {
       menu.style.display = 'none';
       selectTestCase(tc.id, tc.name, item, tc.category);
       // wait for definition then switch to builder
@@ -245,10 +418,35 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 80);
       setTimeout(() => clearInterval(wait), 5000);
     };
+    menu.querySelector('.ctx-duplicate').onclick = async () => {
+      menu.style.display = 'none';
+      duplicateTestCase(tc);
+    };
+    menu.querySelector('.ctx-select').onclick = () => {
+      menu.style.display = 'none';
+      setCatalogSelectMode(true);
+      toggleCatalogItem(tc, true);
+    };
     menu.querySelector('.ctx-delete').onclick = async () => {
       menu.style.display = 'none';
       deleteTestCase(tc);
     };
+  }
+
+  async function duplicateTestCase(tc) {
+    try {
+      const category = tc.category ? `?category=${encodeURIComponent(tc.category)}` : '';
+      const res = await fetch(`/api/testcases/${encodeURIComponent(tc.id)}/duplicate${category}`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || 'Duplicate failed');
+        return;
+      }
+      fetchTestCases();
+      window.loadInBuilder?.(data);
+    } catch (err) {
+      alert('Duplicate failed: ' + err.message);
+    }
   }
 
   async function deleteTestCase(tc) {
@@ -473,6 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
   const layout      = document.getElementById('layout');
   const builderView = document.getElementById('builder-view');
+  let loadingBuilderFromEdit = false;
 
   // ── Tab switching ──
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -482,7 +681,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const tab = btn.dataset.tab;
       layout.style.display      = tab === 'runner'  ? '' : 'none';
       builderView.style.display = tab === 'builder' ? '' : 'none';
-      if (tab === 'builder') loadBuilderCategories();
+      if (tab === 'builder') {
+        loadBuilderCategories();
+        if (!loadingBuilderFromEdit) resetBuilder();
+      }
     });
   });
 
@@ -532,6 +734,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const ctxBadge = document.getElementById('builder-ctx-badge');
   const ctxClear = document.getElementById('builder-ctx-clear');
   const tooltip  = document.getElementById('ctx-tooltip');
+  const ctxSuggest = document.createElement('div');
+  ctxSuggest.className = 'ctx-suggest';
+  ctxSuggest.style.display = 'none';
+  document.body.appendChild(ctxSuggest);
+  let ctxSuggestState = null;
 
   ctxBtn.addEventListener('click', () => {
     const hidden = ctxWrap.style.display === 'none';
@@ -563,7 +770,42 @@ document.addEventListener('DOMContentLoaded', () => {
     tooltip.style.top = top + 'px'; tooltip.style.left = left + 'px';
   });
   stepsEl.addEventListener('mouseout',  () => { tooltip.style.display = 'none'; });
-  document.addEventListener('scroll', () => { tooltip.style.display = 'none'; }, true);
+  document.addEventListener('scroll', () => { tooltip.style.display = 'none'; hideCtxSuggest(); }, true);
+  stepsEl.addEventListener('input', e => {
+    const el = e.target.closest('input, textarea');
+    if (el) updateCtxSuggest(el);
+  });
+  stepsEl.addEventListener('keyup', e => {
+    const el = e.target.closest('input, textarea');
+    if (!el || ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) return;
+    updateCtxSuggest(el);
+  });
+  stepsEl.addEventListener('click', e => {
+    const el = e.target.closest('input, textarea');
+    if (el) updateCtxSuggest(el);
+    else hideCtxSuggest();
+  });
+  stepsEl.addEventListener('keydown', e => {
+    if (!ctxSuggestState || ctxSuggest.style.display === 'none') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideCtxSuggest();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const dir = e.key === 'ArrowDown' ? 1 : -1;
+      setCtxSuggestIndex(ctxSuggestState.index + dir);
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      applyCtxSuggestion(ctxSuggestState.items[ctxSuggestState.index]);
+    }
+  });
+  document.addEventListener('click', e => {
+    if (!ctxSuggest.contains(e.target) && !stepsEl.contains(e.target)) hideCtxSuggest();
+  });
 
   function getCtx() {
     try { return JSON.parse(localStorage.getItem(CTX_KEY) || '{}'); } catch { return {}; }
@@ -602,6 +844,95 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function updateCtxSuggest(el) {
+    const ctx = getCtx();
+    const keys = Object.keys(ctx).sort();
+    if (!keys.length) {
+      hideCtxSuggest();
+      return;
+    }
+
+    const caret = el.selectionStart ?? 0;
+    const before = el.value.slice(0, caret);
+    const match = before.match(/(?:^|[\s"'=:,[({])(\$\{?c?t?x?\.?[\w.-]*)$/);
+    if (!match || !match[1].startsWith('$')) {
+      hideCtxSuggest();
+      return;
+    }
+
+    const token = match[1];
+    const query = token.replace(/^\$\{?/, '').replace(/^ctx\.?/, '').toLowerCase();
+    const items = keys.filter(key => key.toLowerCase().includes(query)).slice(0, 8);
+    if (!items.length) {
+      hideCtxSuggest();
+      return;
+    }
+
+    const start = caret - token.length;
+    ctxSuggestState = { el, start, end: caret, items, index: 0 };
+    renderCtxSuggest(ctx, items);
+    positionCtxSuggest(el);
+  }
+
+  function renderCtxSuggest(ctx, items) {
+    ctxSuggest.innerHTML = items.map((key, i) => `
+      <button class="ctx-suggest-item ${i === 0 ? 'active' : ''}" type="button" data-idx="${i}">
+        <code class="ctx-suggest-key">\${ctx.${X(key)}}</code>
+        <span class="ctx-suggest-val">${X(String(ctx[key]))}</span>
+      </button>
+    `).join('');
+    ctxSuggest.querySelectorAll('.ctx-suggest-item').forEach(btn => {
+      btn.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const idx = Number(btn.dataset.idx || 0);
+        applyCtxSuggestion(ctxSuggestState?.items[idx]);
+      });
+    });
+    ctxSuggest.style.display = '';
+  }
+
+  function positionCtxSuggest(el) {
+    const rect = el.getBoundingClientRect();
+    ctxSuggest.style.left = '0';
+    ctxSuggest.style.top = '0';
+    const width = Math.min(360, Math.max(rect.width, 260));
+    ctxSuggest.style.width = width + 'px';
+    let left = rect.left;
+    let top = rect.bottom + 6;
+    const menuHeight = ctxSuggest.offsetHeight || 180;
+    if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
+    if (top + menuHeight > window.innerHeight - 8) top = rect.top - menuHeight - 6;
+    ctxSuggest.style.left = Math.max(8, left) + 'px';
+    ctxSuggest.style.top = Math.max(8, top) + 'px';
+  }
+
+  function setCtxSuggestIndex(index) {
+    if (!ctxSuggestState) return;
+    const count = ctxSuggestState.items.length;
+    ctxSuggestState.index = (index + count) % count;
+    ctxSuggest.querySelectorAll('.ctx-suggest-item').forEach((item, i) => {
+      item.classList.toggle('active', i === ctxSuggestState.index);
+      if (i === ctxSuggestState.index) item.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  function applyCtxSuggestion(key) {
+    if (!ctxSuggestState || !key) return;
+    const { el, start, end } = ctxSuggestState;
+    const insertion = `\${ctx.${key}}`;
+    el.value = el.value.slice(0, start) + insertion + el.value.slice(end);
+    const caret = start + insertion.length;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    hideCtxSuggest();
+  }
+
+  function hideCtxSuggest() {
+    ctxSuggestState = null;
+    ctxSuggest.style.display = 'none';
+  }
+
   // Replace ${ctx.xxx} in action JSON using localStorage values
   function injectCtx(obj) {
     const ctx = getCtx();
@@ -634,9 +965,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const s = {
       _id: stepSeq, stepId: `step_${stepSeq}`, type,
       // grpc_unary
-      endpoint: '', proxyMode: false, proxyEndpoint: '', serverId: '',
+      endpoint: '', proxyMode: false, proxyEndpoint: '',
       services: [], selectedService: '', selectedMethod: '',
-      metadata: [], payload: '{}',
+      metadata: [], protoFiles: '', payload: '{}',
       // http_request
       httpMethod: 'GET', url: '', headers: [], httpBody: '',
       // websocket
@@ -752,11 +1083,33 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.disabled   = !has;
   }
 
+  function resetBuilder() {
+    document.getElementById('tc-name').value = '';
+    document.getElementById('tc-description').value = '';
+    document.getElementById('tc-category').value = '';
+    document.getElementById('tc-timeout').value = 30000;
+
+    tcSteps = [];
+    stepSeq = 0;
+    activeStepId = null;
+    stepsEl.querySelectorAll('.builder-step-card').forEach(c => c.remove());
+    stepTabsEl.innerHTML = '';
+    emptyEl.style.display = '';
+    setMsg('', '');
+    updateBtns();
+    stepsEl.parentElement?.scrollTo(0, 0);
+  }
+
   // ── Build card HTML ──
   function cardHTML(s) {
     return `
       <div class="bldr-card-header">
         <span class="bldr-step-num"></span>
+        <button class="btn btn-primary btn-sm bldr-run-step-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon bldr-run-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="icon bldr-spin-icon" style="display:none"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          <span class="bldr-run-label">Run Step</span>
+        </button>
         <select class="exp-select bldr-type-select" style="width:175px;font-size:12px;padding:5px 28px 5px 8px">${typeSelectHTML(s.type)}</select>
         <input class="exp-input bldr-step-id-input" value="${X(s.stepId)}" placeholder="step_id" title="Step ID" style="font-family:monospace;font-size:12px;color:var(--text-secondary)">
         <div class="bldr-card-controls">
@@ -765,16 +1118,31 @@ document.addEventListener('DOMContentLoaded', () => {
           <button class="btn btn-sm bldr-del-btn" title="Remove" style="border-color:rgba(239,68,68,0.3);color:var(--neon-danger)">×</button>
         </div>
       </div>
-      <div class="bldr-card-form">${formHTML(s)}</div>
-      <div class="bldr-ae-wrapper"></div>
-      <div class="bldr-card-actions" style="padding:8px 16px 10px;border-top:1px solid rgba(255,255,255,0.05)">
-        <button class="btn bldr-run-step-btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon bldr-run-icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="icon bldr-spin-icon" style="display:none"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-          <span class="bldr-run-label">Run Step</span>
-        </button>
+      <div class="bldr-card-body" style="display: flex; gap: 0;">
+        <div class="bldr-card-section bldr-data-section" style="flex: 1; min-width: 0; border-right: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; display: flex; flex-direction: column;">
+          <div class="bldr-data-header">
+            <span class="bldr-data-title" style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em;">Step Request</span>
+            <button class="icon-btn bldr-horizontal-toggle" type="button" data-target="bldr-data-wrap-${s._id}" style="width:24px;height:24px;border:none;background:transparent;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="transition: transform 0.2s ease;"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+          </div>
+          <div id="bldr-data-wrap-${s._id}" class="bldr-data-wrap" style="flex: 1;">
+            <div class="bldr-card-form">${formHTML(s)}</div>
+            <div class="bldr-ae-wrapper"></div>
+          </div>
+        </div>
+        <div class="bldr-card-section bldr-response-section" id="bldr-result-section-${s._id}" style="display:none; flex: 1; min-width: 0; padding-bottom: 8px;">
+          <div class="bldr-data-header">
+            <span class="bldr-data-title" style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.05em;">Step Response</span>
+            <button class="icon-btn bldr-horizontal-toggle" type="button" data-target="bldr-result-wrap-${s._id}" style="width:24px;height:24px;border:none;background:transparent;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="transition: transform 0.2s ease;"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+          </div>
+          <div id="bldr-result-wrap-${s._id}" class="bldr-data-wrap" style="flex: 1;">
+            <div class="bldr-card-result"></div>
+          </div>
+        </div>
       </div>
-      <div class="bldr-card-result" style="display:none"></div>
     `;
   }
 
@@ -816,11 +1184,6 @@ document.addEventListener('DOMContentLoaded', () => {
         ${s.proxyMode ? `
           <div class="exp-row" style="margin-top:6px">
             <input class="exp-input exp-input-grow bldr-proxy-ep-in" value="${X(s.proxyEndpoint)}" placeholder="localhost:50055 (query server)"/>
-            <button class="btn btn-accent bldr-connect-btn">Connect</button>
-          </div>
-          <div class="exp-row" style="margin-top:8px;gap:10px">
-            <span class="bldr-meta-key-hint">x-server-id</span>
-            <input class="exp-input bldr-serverid-in" style="flex:1" value="${X(s.serverId)}" placeholder="game server UUID"/>
           </div>
         ` : `
           <div class="exp-row" style="margin-top:6px">
@@ -831,19 +1194,37 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="bldr-connect-status exp-connect-status" style="margin-top:4px"></div>
       </div>
       <div class="exp-section">
-        <div class="exp-two-col">
-          <div>
-            <label class="exp-label">Service</label>
-            <select class="exp-select bldr-svc-sel"${s.services.length?'':' disabled'}>
-              <option value="">— connect first —</option>${svcOpts}
-            </select>
+        ${s.proxyMode ? `
+          <div class="exp-two-col">
+            <div>
+              <label class="exp-label">Service <span class="exp-optional">(manual)</span></label>
+              <input class="exp-input bldr-svc-in" value="${X(s.selectedService)}" placeholder="package.ServiceName"/>
+            </div>
+            <div>
+              <label class="exp-label">Method <span class="exp-optional">(manual)</span></label>
+              <input class="exp-input bldr-mtd-in" value="${X(s.selectedMethod)}" placeholder="MethodName"/>
+            </div>
           </div>
-          <div>
-            <label class="exp-label">Method</label>
-            <select class="exp-select bldr-mtd-sel"${s.selectedService?'':' disabled'}>
-              <option value="">— select service —</option>${mtdOpts}
-            </select>
+        ` : `
+          <div class="exp-two-col">
+            <div>
+              <label class="exp-label">Service</label>
+              <select class="exp-select bldr-svc-sel"${s.services.length?'':' disabled'}>
+                <option value="">— connect first —</option>${svcOpts}
+              </select>
+            </div>
+            <div>
+              <label class="exp-label">Method</label>
+              <select class="exp-select bldr-mtd-sel"${s.selectedService?'':' disabled'}>
+                <option value="">— select service —</option>${mtdOpts}
+              </select>
+            </div>
           </div>
+        `}
+        <label class="exp-label" style="margin-top:10px">Proto Files <span class="exp-optional">(optional)</span></label>
+        <div class="exp-row">
+          <input class="exp-input exp-input-grow bldr-protos-in" value="${X(s.protoFiles)}" placeholder="../distributedqueryserver/proto/ClassicalBaccaratManagement.proto"/>
+          <button class="btn btn-accent btn-sm bldr-browse-proto-btn" type="button">Browse</button>
         </div>
       </div>
       <div class="exp-section">
@@ -1068,6 +1449,28 @@ document.addEventListener('DOMContentLoaded', () => {
       removeStep(s._id);
     });
     card.querySelector('.bldr-run-step-btn').addEventListener('click', () => runStep(s, card));
+    
+    card.querySelectorAll('.bldr-horizontal-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const section = btn.closest('.bldr-card-section');
+        if (section) {
+          section.classList.toggle('bldr-collapsed');
+        }
+      });
+    });
+    
+    // Kept for other section toggles if any
+    card.querySelectorAll('.bldr-section-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = document.getElementById(btn.dataset.target);
+        if (target) {
+          const open = target.style.display === 'none';
+          target.style.display = open ? '' : 'none';
+          btn.classList.toggle('bldr-ae-open', open);
+        }
+      });
+    });
+
     attachForm(card, s);
   }
 
@@ -1197,7 +1600,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     bind(card, '.bldr-ep-in',       'input', e => s.endpoint       = e.target.value);
     bind(card, '.bldr-proxy-ep-in', 'input', e => s.proxyEndpoint  = e.target.value);
-    bind(card, '.bldr-serverid-in', 'input', e => s.serverId       = e.target.value);
+    bind(card, '.bldr-svc-in',      'input', e => s.selectedService = e.target.value.trim());
+    bind(card, '.bldr-mtd-in',      'input', e => s.selectedMethod  = e.target.value.trim());
+    bind(card, '.bldr-protos-in',   'input', e => s.protoFiles      = e.target.value);
+    bind(card, '.bldr-browse-proto-btn', 'click', () => openProtoPicker(s, card));
     bind(card, '.bldr-payload-ta',  'input', e => s.payload        = e.target.value);
 
     const connectBtn = card.querySelector('.bldr-connect-btn');
@@ -1308,14 +1714,15 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'grpc_unary': {
         const meta = {};
         s.metadata.forEach(r => { if (r.k) meta[r.k] = r.v; });
-        if (s.proxyMode && s.serverId) meta['x-server-id'] = s.serverId;
         const a = {
           endpoint: s.proxyMode ? s.proxyEndpoint : s.endpoint,
           service:  s.selectedService,
           method:   s.selectedMethod,
           payload:  tryJSON(s.payload, {}),
         };
+        const protoFiles = s.protoFiles.split(',').map(p => p.trim()).filter(Boolean);
         if (Object.keys(meta).length) a.metadata = meta;
+        if (protoFiles.length) a.proto_files = protoFiles;
         return a;
       }
       case 'http_request': {
@@ -1375,6 +1782,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Run step ──
   async function runStep(s, card) {
+    const minRunVisibleMS = 220;
+    const runStartedAt = performance.now();
     const runBtn   = card.querySelector('.bldr-run-step-btn');
     const resultEl = card.querySelector('.bldr-card-result');
     const runIcon  = runBtn.querySelector('.bldr-run-icon');
@@ -1393,12 +1802,14 @@ document.addEventListener('DOMContentLoaded', () => {
     overlay.innerHTML = `<div class="oa-spinner"></div><div class="oa-loading-label">Running step…</div>`;
     card.appendChild(overlay);
 
-    resultEl.style.display = '';
+    const resultSection = card.querySelector(`#bldr-result-section-${s._id}`);
+    if (resultSection) resultSection.style.display = '';
     resultEl.innerHTML = '';
     try {
       const stepJSON = buildStepJSON(s);
       // inject localStorage ctx so individual steps can use exported values
       stepJSON.action = injectCtx(stepJSON.action);
+      stepJSON.timeout_ms = +document.getElementById('tc-timeout').value || 30000;
       const res = await fetch('/api/builder/run-step', {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(stepJSON)
       });
@@ -1410,6 +1821,8 @@ document.addEventListener('DOMContentLoaded', () => {
       renderResult(resultEl, data);
     } catch(err) { renderResult(resultEl, null, err.message); }
     finally {
+      const remainingMS = minRunVisibleMS - (performance.now() - runStartedAt);
+      if (remainingMS > 0) await sleep(remainingMS);
       overlay.remove();
       runBtn.disabled = false;
       runIcon.style.display  = '';
@@ -1417,6 +1830,10 @@ document.addEventListener('DOMContentLoaded', () => {
       runLabel.textContent   = 'Run Step';
       card.classList.remove('bldr-running');
     }
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   // ── Render step result ──
@@ -1431,7 +1848,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <span class="info-text">${result.elapsed_ms} ms</span>
         ${result.error ? `<span class="bldr-result-err-msg">${X(result.error)}</span>` : ''}
       </div>
-      <div class="code-container bldr-result-code" style="margin:0 16px 12px;max-height:180px">
+      <div class="code-container bldr-result-code" style="margin:0 16px 12px;max-height:600px;overflow-y:auto">
         <pre><code class="bldr-result-json"></code></pre>
       </div>`;
     hlJSON(disp, el.querySelector('.bldr-result-json'));
@@ -1460,8 +1877,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!step) return;
         const card = stepsEl.querySelector(`[data-step-id="${step._id}"]`);
         if (!card) return;
+        const resultSection = card.querySelector(`#bldr-result-section-${step._id}`);
+        if (resultSection) resultSection.style.display = '';
         const resultEl = card.querySelector('.bldr-card-result');
-        resultEl.style.display = '';
         renderResult(resultEl, sr);
         step.result = sr;
         if (sr.values) saveCtxValues(sr.values);
@@ -1526,7 +1944,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.loadInBuilder = function loadInBuilder(tc) {
     // Switch tab
     const builderTab = document.querySelector('[data-tab="builder"]');
+    loadingBuilderFromEdit = true;
     if (builderTab) builderTab.click();
+    loadingBuilderFromEdit = false;
 
     // Populate TC header
     document.getElementById('tc-name').value        = tc.name        || '';
@@ -1565,9 +1985,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const a = (typeof sj.action === 'string') ? tryJSON(sj.action, {}) : (sj.action || {});
     const s = {
       _id: stepSeq, stepId: sj.step_id || `step_${stepSeq}`, type: sj.type || 'grpc_unary',
-      endpoint: '', proxyMode: false, proxyEndpoint: '', serverId: '',
+      endpoint: '', proxyMode: false, proxyEndpoint: '',
       services: [], selectedService: '', selectedMethod: '',
-      metadata: [], payload: '{}',
+      metadata: [], protoFiles: '', payload: '{}',
       httpMethod: 'GET', url: '', headers: [], httpBody: '',
       wsUrl: '', wsHeaders: [], wsConnId: '', wsPayload: '{}',
       wsMatchPath: '', wsMatchEquals: '', wsTimeoutMs: 5000,
@@ -1580,10 +2000,10 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (s.type) {
       case 'grpc_unary': {
         const meta = a.metadata || {};
-        const sid  = meta['x-server-id'];
-        if (sid) {
-          s.proxyMode = true; s.proxyEndpoint = a.endpoint || ''; s.serverId = sid;
-          s.metadata  = Object.entries(meta).filter(([k])=>k!=='x-server-id').map(([k,v])=>({k,v}));
+        if (Object.prototype.hasOwnProperty.call(meta, 'x-server-id')) {
+          s.proxyMode = true;
+          s.proxyEndpoint = a.endpoint || '';
+          s.metadata = Object.entries(meta).map(([k,v])=>({k,v}));
         } else {
           s.endpoint = a.endpoint || '';
           s.metadata = Object.entries(meta).map(([k,v])=>({k,v}));
@@ -1593,6 +2013,7 @@ document.addEventListener('DOMContentLoaded', () => {
           s.selectedService = a.service;
           s.selectedMethod  = a.method || '';
         }
+        s.protoFiles = (a.proto_files || []).join(', ');
         s.payload = a.payload ? JSON.stringify(a.payload, null, 2) : '{}';
         break;
       }

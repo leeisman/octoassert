@@ -3,13 +3,11 @@ package fakehttpserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"octoassert/internal/runner"
@@ -114,10 +112,6 @@ func executeStart(ctx context.Context, step testcase.Step, res *runner.StepResul
 	srv := &http.Server{Handler: mux}
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", action.Port))
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
-			res.ResponseSummary = fmt.Sprintf(`{"url":"%s","reused_external":true}`, url)
-			return nil
-		}
 		return fmt.Errorf("failed to listen on port %d: %w", action.Port, err)
 	}
 

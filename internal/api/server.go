@@ -7,6 +7,9 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 
 	// API Routes
 	mux.HandleFunc("/api/testcases", s.handleTestCases)
+	mux.HandleFunc("/api/testcases/bulk-delete", s.handleBulkDeleteTestCases)
 	mux.HandleFunc("/api/testcases/", s.handleTestCase)
 	mux.HandleFunc("/api/catalog/categories/", s.handleCatalogCategory)
 	mux.HandleFunc("/api/runs", s.handleRuns)
@@ -51,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/explore/reflect", s.handleExploreReflect)
 	mux.HandleFunc("/api/explore/run", s.handleExploreRun)
 	mux.HandleFunc("/api/explore/save", s.handleExploreSave)
+	mux.HandleFunc("/api/files/browse", s.handleBrowseFiles)
 
 	// Test Case Builder
 	mux.HandleFunc("/api/builder/run-step", s.handleBuilderRunStep)
@@ -76,10 +81,57 @@ func (s *Server) handleTestCases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, summaries)
 }
 
+func (s *Server) handleBulkDeleteTestCases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Items []struct {
+			ID       string `json:"id"`
+			Category string `json:"category"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "missing test cases")
+		return
+	}
+	deleted := 0
+	for _, item := range req.Items {
+		if item.ID == "" {
+			continue
+		}
+		if err := s.catalog.Delete(item.ID, item.Category); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		deleted++
+	}
+	writeJSON(w, map[string]int{"deleted": deleted})
+}
+
 func (s *Server) handleTestCase(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/testcases/")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing test case id")
+		return
+	}
+	if strings.HasSuffix(id, "/duplicate") {
+		id = strings.TrimSuffix(id, "/duplicate")
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		tc, err := s.catalog.Duplicate(id, r.URL.Query().Get("category"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, tc)
 		return
 	}
 	switch r.Method {
@@ -160,6 +212,86 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	result := s.runner.Run(ctx, tc)
 	s.store.Save(result)
 	writeJSON(w, result)
+}
+
+func (s *Server) handleBrowseFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		var err error
+		path, err = os.Getwd()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !info.IsDir() {
+		absPath = filepath.Dir(absPath)
+	}
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	type fileEntry struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"`
+		RelPath string `json:"rel_path"`
+		Type    string `json:"type"`
+	}
+	cwd, _ := os.Getwd()
+	list := make([]fileEntry, 0, len(entries))
+	for _, entry := range entries {
+		entryPath := filepath.Join(absPath, entry.Name())
+		relPath := relativePath(cwd, entryPath)
+		if entry.IsDir() {
+			list = append(list, fileEntry{Name: entry.Name(), Path: entryPath, RelPath: relPath, Type: "dir"})
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".proto") {
+			list = append(list, fileEntry{Name: entry.Name(), Path: entryPath, RelPath: relPath, Type: "file"})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Type != list[j].Type {
+			return list[i].Type == "dir"
+		}
+		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+	})
+	parent := filepath.Dir(absPath)
+	if parent == absPath {
+		parent = ""
+	}
+	writeJSON(w, map[string]any{
+		"path":    absPath,
+		"relPath": relativePath(cwd, absPath),
+		"parent":  parent,
+		"entries": list,
+	})
+}
+
+func relativePath(base, target string) string {
+	if base == "" {
+		return filepath.ToSlash(target)
+	}
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return filepath.ToSlash(target)
+	}
+	return filepath.ToSlash(rel)
 }
 
 func timeoutFor(tc testcase.TestCase) time.Duration {
