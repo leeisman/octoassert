@@ -1,0 +1,11 @@
+http:
+  port: 18080
+  base_url: "http://localhost:18080"
+
+grpc:
+  port: 19090
+  addr: "localhost:19090"
+
+db:
+  driver: "sqlite"
+  dsn: "data/test.db"

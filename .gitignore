@@ -1,0 +1,9 @@
+.DS_Store
+.idea/
+bin/
+dist/
+coverage.out
+*.log
+app
+vendor/
+data/*.db

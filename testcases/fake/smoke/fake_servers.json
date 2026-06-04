@@ -1,0 +1,130 @@
+{
+  "id": "smoke_fake_servers",
+  "name": "Smoke: Fake HTTP & gRPC Servers",
+  "description": "從 config/fake.yaml 載入 fake server 設定，啟動 fake HTTP 和 fake gRPC server，驗證 http_request 和 grpc_unary executor，最後關閉兩台 server。同時測試 include 的 YAML config 載入功能。",
+  "config": { "timeout_ms": 15000 },
+  "steps": [
+    {
+      "step_id": "load_config",
+      "type": "include",
+      "description": "從 config/fake.yaml 載入 fake server 設定",
+      "action": { "file_path": "config/fake.yaml" },
+      "exports": [
+        { "path": "http.port",     "as": "ctx.http_port" },
+        { "path": "http.base_url", "as": "ctx.http_base_url" },
+        { "path": "grpc.port",     "as": "ctx.grpc_port" },
+        { "path": "grpc.addr",     "as": "ctx.grpc_addr" }
+      ]
+    },
+    {
+      "step_id": "start_http",
+      "type": "fake_http_start",
+      "description": "啟動 fake HTTP server，port 從 config 取得",
+      "action": {
+        "port": "${ctx.http_port}",
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/health",
+            "status": 200,
+            "body": { "status": "ok" }
+          },
+          {
+            "method": "POST",
+            "path": "/api/echo",
+            "status": 200,
+            "body": { "message": "hello from fake" }
+          }
+        ]
+      },
+      "exports": [
+        { "path": "url", "as": "ctx.fake_http_url" }
+      ]
+    },
+    {
+      "step_id": "start_grpc",
+      "type": "fake_grpc_start",
+      "description": "啟動 fake gRPC server，port 從 config 取得",
+      "action": {
+        "port": "${ctx.grpc_port}",
+        "proto_files": ["proto/fake/service.proto"],
+        "responses": {
+          "FakeService/GetStatus": { "status": "ok", "code": 0 },
+          "FakeService/Echo":      { "message": "pong from fake" }
+        }
+      },
+      "exports": [
+        { "path": "addr", "as": "ctx.fake_grpc_url" }
+      ]
+    },
+    {
+      "step_id": "http_health",
+      "type": "http_request",
+      "description": "驗證 http_request executor：GET /health",
+      "action": {
+        "method": "GET",
+        "url": "${ctx.fake_http_url}/health"
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code", "expect": 200 },
+        { "type": "json_path", "path": "body.status",  "expect": "ok" }
+      ]
+    },
+    {
+      "step_id": "http_echo",
+      "type": "http_request",
+      "description": "驗證 http_request executor：POST /api/echo",
+      "action": {
+        "method": "POST",
+        "url": "${ctx.fake_http_url}/api/echo",
+        "headers": { "Content-Type": "application/json" },
+        "payload": { "input": "test" }
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code",  "expect": 200 },
+        { "type": "json_path", "path": "body.message", "expect": "hello from fake" }
+      ]
+    },
+    {
+      "step_id": "grpc_get_status",
+      "type": "grpc_unary",
+      "description": "驗證 grpc_unary executor：FakeService/GetStatus",
+      "action": {
+        "endpoint": "${ctx.fake_grpc_url}",
+        "service":  "FakeService",
+        "method":   "GetStatus",
+        "payload":  {}
+      },
+      "asserts": [
+        { "type": "json_path", "path": "grpc_code",       "expect": "OK" },
+        { "type": "json_path", "path": "response.status", "expect": "ok" },
+        { "type": "json_path", "path": "response.code",   "expect": 0 }
+      ]
+    },
+    {
+      "step_id": "grpc_echo",
+      "type": "grpc_unary",
+      "description": "驗證 grpc_unary executor：FakeService/Echo",
+      "action": {
+        "endpoint": "${ctx.fake_grpc_url}",
+        "service":  "FakeService",
+        "method":   "Echo",
+        "payload":  { "message": "ping" }
+      },
+      "asserts": [
+        { "type": "json_path", "path": "grpc_code",          "expect": "OK" },
+        { "type": "json_path", "path": "response.message",   "expect": "pong from fake" }
+      ]
+    },
+    {
+      "step_id": "stop_http",
+      "type": "fake_http_stop",
+      "action": { "url": "${ctx.fake_http_url}" }
+    },
+    {
+      "step_id": "stop_grpc",
+      "type": "fake_grpc_stop",
+      "action": { "addr": "${ctx.fake_grpc_url}" }
+    }
+  ]
+}

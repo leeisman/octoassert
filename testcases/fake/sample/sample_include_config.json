@@ -1,0 +1,54 @@
+{
+  "id": "sample_include_config",
+  "name": "Sample: Include Config",
+  "description": "示範從 config/fake.yaml 載入環境設定，再啟動 fake server，讓 test case 不 hardcode endpoint。",
+  "config": { "timeout_ms": 10000 },
+  "steps": [
+    {
+      "step_id": "load_config",
+      "type": "include",
+      "description": "從 config/fake.yaml 載入 http base_url",
+      "action": { "file_path": "config/fake.yaml" },
+      "exports": [
+        { "path": "http.base_url", "as": "ctx.base_url" }
+      ]
+    },
+    {
+      "step_id": "start_http",
+      "type": "fake_http_start",
+      "description": "啟動 fake HTTP server on port 18082（與 config 中的 port 對應）",
+      "action": {
+        "port": 18082,
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/status",
+            "status": 200,
+            "body": { "ready": true }
+          }
+        ]
+      },
+      "exports": [
+        { "path": "url", "as": "ctx.actual_url" }
+      ]
+    },
+    {
+      "step_id": "check_status",
+      "type": "http_request",
+      "description": "使用 ctx.actual_url 呼叫 /status",
+      "action": {
+        "method": "GET",
+        "url": "${ctx.actual_url}/status"
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code",  "expect": 200 },
+        { "type": "json_path", "path": "body.ready",   "expect": true }
+      ]
+    },
+    {
+      "step_id": "stop_http",
+      "type": "fake_http_stop",
+      "action": { "url": "${ctx.actual_url}" }
+    }
+  ]
+}

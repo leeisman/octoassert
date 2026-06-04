@@ -1,0 +1,55 @@
+{
+  "id": "fake_http_login",
+  "name": "fake_http_login",
+  "description": "啟動 fake HTTP server 並執行登入，取得 token 存入 ctx.token",
+  "project": "fake",
+  "module": "groups",
+  "api": "http_login",
+  "tags": ["fake", "group"],
+  "config": {
+    "timeout_ms": 5000
+  },
+  "steps": [
+    {
+      "step_id": "start_fake_http",
+      "type": "fake_http_start",
+      "action": {
+        "port": 18083,
+        "routes": [
+          {
+            "method": "POST",
+            "path": "/api/login",
+            "status": 200,
+            "body": { "token": "fake-token-abc" }
+          },
+          {
+            "method": "GET",
+            "path": "/health",
+            "status": 200,
+            "body": { "authenticated": true }
+          }
+        ]
+      },
+      "exports": [
+        { "path": "url", "as": "ctx.fake_http_url" }
+      ]
+    },
+    {
+      "step_id": "login",
+      "type": "http_request",
+      "action": {
+        "method": "POST",
+        "url": "${ctx.fake_http_url}/api/login",
+        "headers": { "Content-Type": "application/json" },
+        "payload": { "user": "test", "pass": "1234" }
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code", "expect": 200 },
+        { "type": "json_path", "path": "body.token", "expect": "fake-token-abc" }
+      ],
+      "exports": [
+        { "path": "body.token", "as": "ctx.token" }
+      ]
+    }
+  ]
+}

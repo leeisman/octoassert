@@ -1,0 +1,68 @@
+{
+  "id": "sample_http",
+  "name": "Sample: HTTP Request",
+  "description": "啟動 fake HTTP server，驗證 http_request executor 的 GET / POST 行為。",
+  "config": { "timeout_ms": 10000 },
+  "steps": [
+    {
+      "step_id": "start_http",
+      "type": "fake_http_start",
+      "action": {
+        "port": 18081,
+        "routes": [
+          {
+            "method": "GET",
+            "path": "/ping",
+            "status": 200,
+            "body": { "pong": true }
+          },
+          {
+            "method": "POST",
+            "path": "/users",
+            "status": 201,
+            "body": { "id": 42, "name": "test" }
+          }
+        ]
+      },
+      "exports": [
+        { "path": "url", "as": "ctx.http_url" }
+      ]
+    },
+    {
+      "step_id": "get_ping",
+      "type": "http_request",
+      "description": "GET /ping 應回傳 200 + pong: true",
+      "action": {
+        "method": "GET",
+        "url": "${ctx.http_url}/ping"
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code",  "expect": 200 },
+        { "type": "json_path", "path": "body.pong",    "expect": true }
+      ]
+    },
+    {
+      "step_id": "post_users",
+      "type": "http_request",
+      "description": "POST /users 應回傳 201 + id",
+      "action": {
+        "method": "POST",
+        "url": "${ctx.http_url}/users",
+        "headers": { "Content-Type": "application/json" },
+        "payload": { "name": "test" }
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code", "expect": 201 },
+        { "type": "json_path", "path": "body.id",     "expect": 42 }
+      ],
+      "exports": [
+        { "path": "body.id", "as": "ctx.user_id" }
+      ]
+    },
+    {
+      "step_id": "stop_http",
+      "type": "fake_http_stop",
+      "action": { "url": "${ctx.http_url}" }
+    }
+  ]
+}

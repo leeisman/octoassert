@@ -1,0 +1,33 @@
+{
+  "id": "sample_group",
+  "name": "Sample: Group",
+  "description": "示範 group executor，把登入流程定義在 groups/fake_http_login.json，test case 直接引用，不重複步驟。",
+  "config": { "timeout_ms": 15000 },
+  "steps": [
+    {
+      "step_id": "login",
+      "type": "group",
+      "description": "執行共用登入流程，取得 ctx.token",
+      "action": { "file": "testcases/fake/groups/fake_http_login.json" }
+    },
+    {
+      "step_id": "use_token",
+      "type": "http_request",
+      "description": "用 ctx.token 打一個需要認證的 API",
+      "action": {
+        "method": "GET",
+        "url": "${ctx.fake_http_url}/health",
+        "headers": { "Authorization": "Bearer ${ctx.token}" }
+      },
+      "asserts": [
+        { "type": "json_path", "path": "status_code", "expect": 200 },
+        { "type": "json_path", "path": "body.authenticated", "expect": true }
+      ]
+    },
+    {
+      "step_id": "stop_http",
+      "type": "fake_http_stop",
+      "action": { "url": "${ctx.fake_http_url}" }
+    }
+  ]
+}

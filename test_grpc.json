@@ -1,0 +1,24 @@
+{
+  "test_id": "test_grpc_01",
+  "name": "Test gRPC Lobby",
+  "description": "Fetch Operative Game List from distributedlobbyserver",
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "grpc_unary",
+      "action": {
+        "endpoint": "localhost:50054",
+        "service": "distribute.DistributeLobby",
+        "method": "FetchOperateGameList",
+        "payload": {}
+      },
+      "asserts": [
+        {
+          "type": "json_path",
+          "path": "grpc_code",
+          "expect": "OK"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "fetchserverlist",
+  "name": "FetchServerList",
+  "description": "",
+  "config": {
+    "timeout_ms": 30000
+  },
+  "steps": [
+    {
+      "step_id": "call",
+      "type": "grpc_unary",
+      "description": "management.DistributeServiceManagement/FetchServerList",
+      "action": {
+        "endpoint": "127.0.0.1:50055",
+        "method": "FetchServerList",
+        "payload": {},
+        "service": "management.DistributeServiceManagement"
+      },
+      "asserts": null,
+      "exports": null
+    }
+  ]
+}

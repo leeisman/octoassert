@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OctoAssert</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="background-glow"></div>
+  <div class="background-glow bg-glow-right"></div>
+
+  <header class="glass-panel header">
+    <div class="logo">
+      <div class="logo-icon"></div>
+      <h1>OctoAssert</h1>
+    </div>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="runner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        Test Runner
+      </button>
+      <button class="tab-btn" data-tab="builder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Test Case Builder
+      </button>
+    </nav>
+    <div class="status-indicator">
+      <span class="pulse"></span> System Online
+    </div>
+  </header>
+
+  <!-- ── Test Runner View ── -->
+  <main class="container" id="layout">
+    <aside class="glass-panel sidebar">
+      <h2 class="panel-title sidebar-title">
+        <span class="sidebar-title-text">Catalog</span>
+        <button id="catalog-toggle" class="icon-btn" type="button" aria-label="Collapse catalog" title="Collapse catalog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
+      </h2>
+      <div id="tree" class="tree-container">
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line" style="width: 70%"></div>
+        <div class="skeleton-line" style="width: 80%"></div>
+      </div>
+    </aside>
+
+    <section class="glass-panel content">
+      <div class="content-header">
+        <h2 class="panel-title" id="current-test-title">Select a Test Case</h2>
+        <div class="actions">
+          <button id="btn-edit-builder" class="btn" disabled title="Load this test case into the Builder for editing">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit in Builder
+          </button>
+          <button id="btn-run" class="btn btn-primary" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Execute Run
+          </button>
+        </div>
+      </div>
+      <div class="info-bar" id="info-bar" style="display: none;">
+        <div class="badge badge-neutral" id="run-status">Waiting</div>
+        <span class="info-text">ID: <strong id="run-id">-</strong></span>
+        <span class="info-text">Elapsed: <strong id="run-time">-</strong> ms</span>
+      </div>
+      <div class="results-grid" id="results-grid">
+        <div class="steps-timeline glass-inner">
+          <h3 class="inner-title">Execution Steps</h3>
+          <div id="steps-list" class="steps-list">
+            <div class="empty-state">No execution data</div>
+          </div>
+        </div>
+        <div class="json-column">
+          <div class="json-viewer glass-inner testcase-viewer" id="testcase-viewer">
+            <h3 class="inner-title testcase-viewer-title">
+              Test Case JSON
+              <button id="testcase-toggle" class="icon-btn" type="button" title="Collapse">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="18 15 12 9 6 15"></polyline></svg>
+              </button>
+            </h3>
+            <div class="code-container" id="testcase-body">
+              <pre><code id="testcase-json-output">// Selected test case JSON will appear here...</code></pre>
+            </div>
+          </div>
+          <div class="step-data-grid">
+            <div class="json-viewer glass-inner request-viewer">
+              <h3 class="inner-title">Step Request</h3>
+              <div class="code-container">
+                <pre><code id="request-output">// Select an execution step to inspect request data...</code></pre>
+              </div>
+            </div>
+            <div class="json-viewer glass-inner response-viewer">
+              <h3 class="inner-title">Step Result</h3>
+              <div class="code-container">
+                <pre><code id="json-output">// Select an execution step to inspect response data...</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ── Test Case Builder View ── -->
+  <div class="builder-container" id="builder-view" style="display:none">
+
+    <!-- TC Config -->
+    <div class="glass-panel builder-config-panel">
+      <div class="builder-config-grid">
+        <div>
+          <label class="exp-label">Name <span class="exp-required">*</span></label>
+          <input id="tc-name" class="exp-input" placeholder="revive baccarat room" autocomplete="off">
+        </div>
+        <div>
+          <label class="exp-label">Category</label>
+          <input id="tc-category" class="exp-input" placeholder="baccarat" list="builder-cat-list" autocomplete="off">
+          <datalist id="builder-cat-list"></datalist>
+        </div>
+        <div>
+          <label class="exp-label">Timeout (ms)</label>
+          <input id="tc-timeout" class="exp-input" type="number" value="30000" min="0" style="width:120px">
+        </div>
+      </div>
+      <div class="builder-desc-row">
+        <label class="exp-label">Description</label>
+        <input id="tc-description" class="exp-input" placeholder="Optional description...">
+      </div>
+    </div>
+
+    <!-- Step tab bar -->
+    <div class="glass-panel builder-tab-bar">
+      <div id="builder-step-tabs" class="builder-step-tabs"></div>
+      <button id="builder-add-btn" class="btn btn-accent btn-sm" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Step
+      </button>
+    </div>
+
+    <!-- Active step content -->
+    <div class="builder-step-content-wrap">
+      <div id="builder-steps" class="builder-step-content">
+        <div class="builder-empty-state" id="builder-empty">
+          No steps yet — click <strong>Add Step</strong> to begin.
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Variables Panel -->
+    <div id="builder-ctx-wrap" class="builder-ctx-wrap" style="display:none">
+      <div class="glass-panel builder-ctx-panel">
+        <div class="builder-ctx-header">
+          <span class="exp-label" style="margin:0">Context Variables</span>
+          <button id="builder-ctx-clear" class="btn btn-sm" style="border-color:rgba(239,68,68,0.3);color:var(--neon-danger)">Clear All</button>
+        </div>
+        <div id="builder-ctx-rows" class="builder-ctx-rows">
+          <div class="bldr-ctx-empty">No context variables yet. Run a step with exports to populate.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="glass-panel builder-footer">
+      <button id="builder-ctx-btn" class="btn" title="View context variables">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Context
+        <span id="builder-ctx-badge" class="bldr-ctx-badge" style="display:none"></span>
+      </button>
+      <div class="builder-footer-right">
+        <button id="builder-run-all-btn" class="btn btn-primary" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run All
+        </button>
+        <button id="builder-save-btn" class="btn btn-success" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Test Case
+        </button>
+        <span id="builder-save-msg" class="exp-save-msg"></span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Right-click context menu -->
+  <div id="tc-context-menu" class="ctx-menu" style="display:none">
+    <button class="ctx-item ctx-run">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Execute Run
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item ctx-edit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Edit in Builder
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item ctx-delete" style="color:var(--neon-danger)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+      Delete
+    </button>
+  </div>
+
+  <!-- Context tooltip -->
+  <div id="ctx-tooltip" class="ctx-tooltip" style="display:none"></div>
+
+  <!-- Confirm modal -->
+  <div id="oa-modal-overlay" class="oa-modal-overlay" style="display:none">
+    <div class="oa-modal glass-panel">
+      <div class="oa-modal-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div class="oa-modal-body">
+        <div class="oa-modal-title" id="oa-modal-title"></div>
+        <div class="oa-modal-msg"   id="oa-modal-msg"></div>
+      </div>
+      <div class="oa-modal-actions">
+        <button id="oa-modal-cancel"  class="btn">取消</button>
+        <button id="oa-modal-confirm" class="btn oa-btn-danger">確定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
