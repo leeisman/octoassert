@@ -352,6 +352,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Build a tree structure based on category.
     const tree = {};
     
+    let expandedFolders = new Set();
+    try {
+      expandedFolders = new Set(JSON.parse(localStorage.getItem('octoassert_expanded_folders') || '[]'));
+    } catch (e) {}
+    
+    function saveExpandedFolders() {
+      localStorage.setItem('octoassert_expanded_folders', JSON.stringify(Array.from(expandedFolders)));
+    }
+    
     // Ensure all known categories (even empty ones) are in the tree
     allCategories.forEach(cat => {
       if (!cat) return;
@@ -378,8 +387,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Render HTML
     function buildHtml(node, name) {
       const div = document.createElement('div');
-      div.className = 'folder';
       const category = node.__category || name;
+      const isExpanded = expandedFolders.has(category);
+      div.className = isExpanded ? 'folder' : 'folder collapsed';
       
       const header = document.createElement('div');
       header.className = 'folder-header';
@@ -396,6 +406,12 @@ document.addEventListener('DOMContentLoaded', () => {
       header.onclick = e => {
         if (e.target.closest('.folder-delete-btn')) return;
         div.classList.toggle('collapsed');
+        if (div.classList.contains('collapsed')) {
+          expandedFolders.delete(category);
+        } else {
+          expandedFolders.add(category);
+        }
+        saveExpandedFolders();
       };
       header.querySelector('.folder-delete-btn').onclick = e => {
         e.stopPropagation();
@@ -1018,6 +1034,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  window.refreshSelectedTestCase = function(id, category = null) {
+    if (currentTestCaseId !== id) return;
+    if ((currentTestCaseCategory || '') !== (category || '')) return;
+    fetchTestCaseDefinition(id, category || null);
+  };
+
   function setRunnerJsonText(text, { readonly }) {
     testCaseJsonOutput.value = text;
     testCaseJsonOutput.readOnly = readonly;
@@ -1086,15 +1108,30 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function executeTestCase() {
-    if (!currentTestCaseId) return;
+    if (!currentTestCaseId || !currentTestCase || !currentTestCase.steps) return;
 
     btnRun.disabled = true;
     btnRun.innerHTML = `<span class="pulse"></span> Running...`;
-    stepsList.innerHTML = `
-      <div class="oa-steps-spinner">
-        <div class="oa-spinner"></div>
-        <span>Executing…</span>
-      </div>`;
+    
+    // Draw initial gray step cards
+    stepsList.innerHTML = '';
+    currentTestCase.steps.forEach((step, idx) => {
+      const div = document.createElement('div');
+      div.className = `step-card pending`;
+      div.id = `runner-step-card-${idx}`;
+      div.innerHTML = `
+        <div class="step-marker"></div>
+        <div class="step-content">
+          <div class="step-header">
+            <span class="step-name">${step.step_id || 'Step '+(idx+1)}</span>
+            <span class="step-type">${step.type}</span>
+          </div>
+          <div class="step-time" id="runner-step-time-${idx}">...</div>
+        </div>
+      `;
+      stepsList.appendChild(div);
+    });
+
     requestOutput.textContent = '// Waiting for execution steps...';
     jsonOutput.textContent = '// Waiting for response...';
     infoBar.style.display = 'none';
@@ -1102,20 +1139,52 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/api/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson'
+        },
         body: JSON.stringify({ id: currentTestCaseId, category: currentTestCaseCategory || '' })
       });
-      const data = await res.json();
-      currentRunResult = data;
+
       if (!res.ok) {
+        const data = await res.json().catch(()=>({error: 'Failed'}));
         showToast(`Execute Run failed: ${data.error || 'Failed'}`, 'error');
-        renderResult(data);
+        renderRunResult(data);
         return;
       }
-      renderResult(data);
-      showRunnerRunToast(data);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) buffer += decoder.decode(value, { stream: true });
+        
+        let newlineIdx;
+        while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+          if (!line) continue;
+          
+          try {
+            const ev = JSON.parse(line);
+            if (ev.type === 'progress') {
+              const card = document.getElementById(`runner-step-card-${ev.index}`);
+              if (card) {
+                card.className = `step-card ${ev.status}`;
+              }
+            } else if (ev.type === 'complete') {
+              currentRunResult = ev.result;
+              renderRunResult(ev.result);
+              showRunnerRunToast(ev.result);
+            }
+          } catch(e) {}
+        }
+        if (done) break;
+      }
     } catch (err) {
-      stepsList.innerHTML = `<div class="empty-state" style="color:var(--neon-danger)">Execution failed: ${err.message}</div>`;
+      stepsList.innerHTML += `<div class="empty-state" style="color:var(--neon-danger)">Execution failed: ${err.message}</div>`;
       showToast(`Execute Run failed: ${err.message}`, 'error');
     } finally {
       btnRun.disabled = false;
@@ -1135,7 +1204,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(`Execute Run failed: ${passed} passed, ${failed} failed${elapsed}`, 'error');
   }
 
-  function renderResult(result) {
+  function renderRunResult(result) {
     infoBar.style.display = 'flex';
     runId.textContent = result.test_case_id;
     runTime.textContent = result.elapsed_ms;
@@ -1265,10 +1334,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const EXEC_TYPES = [
     { v: 'grpc_unary',        l: 'gRPC Unary',       g: 'gRPC'        },
     { v: 'http_request',      l: 'HTTP Request',      g: 'HTTP'        },
-    { v: 'websocket_connect', l: 'WS Connect',        g: 'WebSocket'   },
-    { v: 'websocket_send',    l: 'WS Send',           g: 'WebSocket'   },
-    { v: 'websocket_await',   l: 'WS Await',          g: 'WebSocket'   },
-    { v: 'websocket_close',   l: 'WS Close',          g: 'WebSocket'   },
+    { v: 'websocket',         l: 'WebSocket',         g: 'WebSocket'   },
     { v: 'db_check',          l: 'DB Check',          g: 'Database'    },
     { v: 'delay',             l: 'Delay',             g: 'Utility'     },
     { v: 'include',           l: 'Include',           g: 'Utility'     },
@@ -1464,7 +1530,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderCtxSuggest(ctx, items) {
     ctxSuggest.innerHTML = items.map((key, i) => `
       <button class="ctx-suggest-item ${i === 0 ? 'active' : ''}" type="button" data-idx="${i}">
-        <code class="ctx-suggest-key">\${ctx.${X(key)}}</code>
+        <code class="ctx-suggest-key">${X(ctxPlaceholderForKey(key))}</code>
         <span class="ctx-suggest-val">${X(String(ctx[key]))}</span>
       </button>
     `).join('');
@@ -1506,7 +1572,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function applyCtxSuggestion(key) {
     if (!ctxSuggestState || !key) return;
     const { el, start, end } = ctxSuggestState;
-    const insertion = `\${ctx.${key}}`;
+    const insertion = ctxPlaceholderForKey(key);
     el.value = el.value.slice(0, start) + insertion + el.value.slice(end);
     const caret = start + insertion.length;
     el.focus();
@@ -1524,13 +1590,40 @@ document.addEventListener('DOMContentLoaded', () => {
   function injectCtx(obj) {
     const ctx = getCtx();
     if (!Object.keys(ctx).length) return obj;
-    let str = JSON.stringify(obj);
-    str = str.replace(/\$\{(ctx\.[^}]+)\}/g, (_, key) =>
-      ctx[key] !== undefined
-        ? String(ctx[key]).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        : `\${${key}}`
+    return replaceCtxPlaceholders(obj, ctx);
+  }
+
+  function replaceCtxPlaceholders(value, ctx) {
+    if (Array.isArray(value)) return value.map(item => replaceCtxPlaceholders(item, ctx));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [k, replaceCtxPlaceholders(v, ctx)])
+      );
+    }
+    if (typeof value !== 'string') return value;
+    const exact = value.match(/^\$\{(ctx\.[^}]+)\}$/);
+    if (exact) {
+      const key = normalizeCtxLookupKey(exact[1], ctx);
+      if (key) return ctx[key];
+    }
+    return value.replace(/\$\{(ctx\.[^}]+)\}/g, (full, key) =>
+      normalizeCtxLookupKey(key, ctx) ? String(ctx[normalizeCtxLookupKey(key, ctx)]) : full
     );
-    try { return JSON.parse(str); } catch { return obj; }
+  }
+
+  function ctxPlaceholderForKey(key) {
+    const clean = String(key || '').replace(/^ctx\./, '');
+    return `\${ctx.${clean}}`;
+  }
+
+  function normalizeCtxLookupKey(key, ctx) {
+    const raw = String(key || '');
+    const candidates = [
+      raw,
+      raw.startsWith('ctx.') ? raw.replace(/^ctx\./, '') : `ctx.${raw}`,
+      raw.startsWith('ctx.ctx.') ? raw.replace(/^ctx\./, '') : '',
+    ].filter(Boolean);
+    return candidates.find(candidate => Object.prototype.hasOwnProperty.call(ctx, candidate)) || '';
   }
 
   renderCtxPanel();
@@ -1558,8 +1651,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // http_request
       httpMethod: 'GET', url: '', headers: [], httpBody: '',
       // websocket
-      wsUrl: '', wsHeaders: [], wsConnId: '', wsPayload: '{}',
-      wsMatchPath: '', wsMatchEquals: '', wsTimeoutMs: 5000,
+      wsUrl: '', wsHeaders: [], wsOps: [],
       // db_check
       dbDriver: 'postgres', dbDsn: '', dbSql: '',
       // delay
@@ -1743,9 +1835,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function resetBuilder() {
     document.getElementById('tc-name').value = '';
+    document.getElementById('tc-id').value = '';
     document.getElementById('tc-description').value = '';
     document.getElementById('tc-category').value = '';
     document.getElementById('tc-timeout').value = 30000;
+    window._resetTcIdTracking?.();
 
     tcSteps = [];
     stepSeq = 0;
@@ -1810,10 +1904,7 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (s.type) {
       case 'grpc_unary':        return fGrpc(s);
       case 'http_request':      return fHttp(s);
-      case 'websocket_connect': return fWsConn(s);
-      case 'websocket_send':    return fWsSend(s);
-      case 'websocket_await':   return fWsAwait(s);
-      case 'websocket_close':   return fWsClose(s);
+      case 'websocket':         return fWs(s);
       case 'db_check':          return fDb(s);
       case 'delay':             return fDelay(s);
       case 'include':           return fInclude(s);
@@ -1897,7 +1988,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="exp-section" style="display:flex;flex-direction:column;gap:6px;padding-bottom:4px">
         <label class="exp-label">Payload <span class="exp-optional">(JSON)</span></label>
-        <textarea class="exp-textarea bldr-payload-ta" spellcheck="false" style="min-height:200px">${X(s.payload)}</textarea>
+        <textarea class="exp-textarea bldr-payload-ta" data-json-editor spellcheck="false" style="min-height:200px">${X(s.payload)}</textarea>
       </div>`;
   }
 
@@ -1921,16 +2012,16 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="exp-section" style="display:flex;flex-direction:column;gap:6px;padding-bottom:4px">
         <label class="exp-label">Body <span class="exp-optional">(JSON, optional)</span></label>
-        <textarea class="exp-textarea bldr-http-body-ta" spellcheck="false" style="min-height:260px">${X(s.httpBody)}</textarea>
+        <textarea class="exp-textarea bldr-http-body-ta" data-json-editor spellcheck="false" style="min-height:260px">${X(s.httpBody)}</textarea>
       </div>`;
   }
-
-  function fWsConn(s) {
-    const hRows = s.wsHeaders.map((h,i)=>metaRowHTML(h,i,'Authorization','Bearer ...')).join('');
+  function fWs(s) {
+    const hRows = s.wsHeaders.map((h,i) => metaRowHTML(h, i, 'Authorization', 'Bearer ...')).join('');
     return `
       <div class="exp-section">
         <label class="exp-label">URL</label>
-        <input class="exp-input bldr-ws-url-in" style="width:100%" value="${X(s.wsUrl)}" placeholder="ws://localhost:8080/api/v1/external/connect?ticket=..."/>
+        <input class="exp-input bldr-ws-url-in" style="width:100%" value="${X(s.wsUrl)}"
+          placeholder="ws://127.0.0.1:8080/api/v1/external/connect?ticket=\${ctx.ticket}"/>
       </div>
       <div class="exp-section">
         <div class="exp-section-header">
@@ -1939,52 +2030,9 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div class="exp-meta-rows bldr-wsh-rows">${hRows}</div>
       </div>
-      <div class="exp-section" style="padding-bottom:12px">
-        <p class="bldr-hint">After connecting, <code>conn_id</code> is returned. Export it with <code>${'${ctx.ws_conn}'}</code> and reference it in send/await/close steps.</p>
-      </div>`;
-  }
-
-  function fWsSend(s) {
-    return `
-      <div class="exp-section">
-        <label class="exp-label">Connection ID</label>
-        <input class="exp-input bldr-ws-conn-in" style="width:100%" value="${X(s.wsConnId)}" placeholder="\${ctx.ws_conn}"/>
-      </div>
-      <div class="exp-section" style="display:flex;flex-direction:column;gap:6px;padding-bottom:4px">
-        <label class="exp-label">Payload <span class="exp-optional">(JSON)</span></label>
-        <textarea class="exp-textarea bldr-ws-payload-ta" rows="5" spellcheck="false">${X(s.wsPayload)}</textarea>
-      </div>`;
-  }
-
-  function fWsAwait(s) {
-    return `
-      <div class="exp-section">
-        <label class="exp-label">Connection ID</label>
-        <input class="exp-input bldr-ws-conn-in" style="width:100%" value="${X(s.wsConnId)}" placeholder="\${ctx.ws_conn}"/>
-      </div>
-      <div class="exp-section">
-        <div class="exp-two-col">
-          <div>
-            <label class="exp-label">Match Path</label>
-            <input class="exp-input bldr-ws-mpath-in" value="${X(s.wsMatchPath)}" placeholder="Type"/>
-          </div>
-          <div>
-            <label class="exp-label">Equals</label>
-            <input class="exp-input bldr-ws-meq-in" value="${X(s.wsMatchEquals)}" placeholder="presence"/>
-          </div>
-        </div>
-      </div>
-      <div class="exp-section" style="padding-bottom:12px">
-        <label class="exp-label">Timeout (ms)</label>
-        <input class="exp-input bldr-ws-timeout-in" type="number" value="${s.wsTimeoutMs}" style="width:120px"/>
-      </div>`;
-  }
-
-  function fWsClose(s) {
-    return `
-      <div class="exp-section" style="padding-bottom:12px">
-        <label class="exp-label">Connection ID</label>
-        <input class="exp-input bldr-ws-conn-in" style="width:100%" value="${X(s.wsConnId)}" placeholder="\${ctx.ws_conn}"/>
+      <div class="exp-section" style="padding-bottom:8px">
+        <label class="exp-label" style="margin-bottom:8px;display:block">Operations</label>
+        <div class="bldr-ws-ops-list"></div>
       </div>`;
   }
 
@@ -2053,7 +2101,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div class="exp-section" style="display:flex;flex-direction:column;gap:6px;padding-bottom:4px">
         <label class="exp-label">Responses <span class="exp-optional">(JSON: "Service/Method" → body)</span></label>
-        <textarea class="exp-textarea bldr-fgrpc-resp-ta" spellcheck="false" style="min-height:280px">${X(s.fakeGrpcResponses)}</textarea>
+        <textarea class="exp-textarea bldr-fgrpc-resp-ta" data-json-editor spellcheck="false" style="min-height:280px">${X(s.fakeGrpcResponses)}</textarea>
       </div>`;
   }
 
@@ -2075,7 +2123,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input class="exp-input bldr-fhttp-port-in" type="number" value="${s.fakeHttpPort}" style="width:90px"/>
           </div>
         </div>
-        <textarea class="exp-textarea bldr-fhttp-routes-ta" spellcheck="false" style="min-height:320px">${X(s.fakeHttpRoutes)}</textarea>
+        <textarea class="exp-textarea bldr-fhttp-routes-ta" data-json-editor spellcheck="false" style="min-height:320px">${X(s.fakeHttpRoutes)}</textarea>
       </div>`;
   }
 
@@ -2098,6 +2146,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Attach card events ──
   function attachCard(card, s) {
+    s._card = card; // store DOM reference for DOM-sync on save
     card.querySelector('.bldr-type-select').addEventListener('change', e => {
       s.type = e.target.value;
       card.querySelector('.bldr-card-form').innerHTML = formHTML(s);
@@ -2145,11 +2194,9 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (s.type) {
       case 'grpc_unary':        attachGrpc(card, s); break;
       case 'http_request':      attachHttp(card, s); break;
-      case 'websocket_connect': attachWsConn(card, s); break;
-      case 'websocket_send':    attachWsSend(card, s); break;
-      case 'websocket_await':   attachWsAwait(card, s); break;
-      case 'websocket_close':   bind(card, '.bldr-ws-conn-in', 'input', e => s.wsConnId = e.target.value); break;
+      case 'websocket':         attachWebSocket(card, s); break;
       case 'db_check':          attachDb(card, s); break;
+
       case 'delay':             bind(card, '.bldr-delay-in', 'input', e => s.durationMs = +e.target.value || 0); break;
       case 'include':           bind(card, '.bldr-include-in', 'input', e => s.includePath = e.target.value); break;
       case 'group':             bind(card, '.bldr-group-in', 'input', e => s.groupFile = e.target.value); break;
@@ -2158,10 +2205,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'fake_http_start':   attachFakeHttpStart(card, s); break;
       case 'fake_http_stop':    bind(card, '.bldr-fhttp-url-in', 'input', e => s.fakeHttpUrl = e.target.value); break;
     }
+    // Initialize JSON editor overlays for all JSON textareas in this form
+    initJsonEditors(card.querySelector('.bldr-card-form'));
   }
 
   // ── Assertions & Exports ──
   function renderAE(card, s) {
+    // WebSocket uses per-operation exports/asserts — skip the step-level AE panel
+    if (s.type === 'websocket') return;
     const wrapper = card.querySelector('.bldr-ae-wrapper');
     if (!wrapper) return;
 
@@ -2308,6 +2359,165 @@ document.addEventListener('DOMContentLoaded', () => {
     attachMetaRows(card, s, '.bldr-meta-rows', '.bldr-add-meta-btn', s.metadata);
   }
 
+  // ── WebSocket structured editor ──
+  function attachWebSocket(card, s) {
+    bind(card, '.bldr-ws-url-in', 'input', e => s.wsUrl = e.target.value);
+    attachMetaRows(card, s, '.bldr-wsh-rows', '.bldr-add-wsh-btn', s.wsHeaders);
+
+    renderWsOps(card, s);
+  }
+
+  function renderWsOps(card, s) {
+    const list = card.querySelector('.bldr-ws-ops-list');
+    if (!list) return;
+
+    function opHTML(op, i) {
+      const isSend    = op.type === 'send';
+      const isCollect = op.type === 'collect';
+      const mt        = op.matchType || 'equals';   // 'equals' | 'any' | 'contains'
+      const expRows = isSend ? '' : (op.exports || []).map((e, ei) => `
+        <div class="bldr-ae-row" data-ei="${ei}">
+          <input class="exp-input bldr-ws-exp-path" value="${X(e.path)}" placeholder="response.field"/>
+          <span class="bldr-ae-arrow">→</span>
+          <input class="exp-input bldr-ws-exp-as"   value="${X(e.as)}"   placeholder="ctx.variable_name"/>
+          <button class="exp-remove-meta bldr-rm-ws-exp" data-ei="${ei}">×</button>
+        </div>`).join('');
+
+      return `
+        <div class="bldr-ws-op-card${op.disabled ? ' disabled' : ''}" data-oi="${i}">
+          <div class="bldr-ws-op-header">
+            <label class="bldr-ws-op-run-toggle" title="Run or skip this operation">
+              <input class="bldr-ws-op-enabled" type="checkbox"${op.disabled ? '' : ' checked'}>
+              <span>Run</span>
+            </label>
+            <span class="bldr-ws-op-badge ${isSend ? 'bldr-ws-send' : isCollect ? 'bldr-ws-collect' : 'bldr-ws-await'}">${isSend ? 'SEND' : isCollect ? 'COLLECT' : 'AWAIT'}</span>
+            <div class="bldr-ws-op-meta">
+              <input class="exp-input bldr-ws-op-id"   value="${X(op.id||'')}"          placeholder="op_id (optional)" style="width:130px;font-family:monospace;font-size:11px"/>
+              <input class="exp-input bldr-ws-op-desc" value="${X(op.description||'')}" placeholder="Description…"     style="flex:1;font-size:12px"/>
+            </div>
+            <div class="bldr-ws-op-controls">
+              <button class="btn btn-sm bldr-ws-op-up"  data-oi="${i}" ${i===0?'disabled':''} title="Move up">↑</button>
+              <button class="btn btn-sm bldr-ws-op-dn"  data-oi="${i}" ${i===s.wsOps.length-1?'disabled':''} title="Move down">↓</button>
+              <button class="btn btn-sm bldr-ws-op-del" data-oi="${i}" title="Remove" style="border-color:rgba(239,68,68,0.3);color:var(--neon-danger)">×</button>
+            </div>
+          </div>
+          <div class="bldr-ws-op-body">
+            ${isSend ? `
+              <label class="exp-label">Payload <span class="exp-optional">(JSON)</span></label>
+              <textarea class="exp-textarea bldr-ws-op-payload" data-json-editor spellcheck="false" style="min-height:120px">${X(op.payload)}</textarea>
+            ` : isCollect ? `
+              <div style="display:flex;align-items:center;gap:10px">
+                <label class="exp-label" style="margin:0;white-space:nowrap">Timeout (ms)</label>
+                <input class="exp-input bldr-ws-op-timeout" type="number" value="${op.timeoutMs||3000}" style="width:120px"/>
+              </div>
+              <p class="bldr-hint" style="margin-top:8px">Waits for the full timeout duration, collects all messages received, and returns them. No match filtering.</p>
+            ` : `
+              <div style="display:flex;gap:10px;align-items:flex-end">
+                <div style="flex:1">
+                  <label class="exp-label">Match Path <span class="exp-optional">(empty = accept any message)</span></label>
+                  <input class="exp-input bldr-ws-op-mpath" value="${X(op.matchPath)}" placeholder="Leave empty for any / e.g. Type"/>
+                </div>
+                <div style="flex-shrink:0">
+                  <label class="exp-label">Match Type</label>
+                  <select class="exp-select bldr-ws-op-mtype" style="width:110px">
+                    <option value="equals"   ${mt==='equals'  ?'selected':''}>Equals</option>
+                    <option value="any"      ${mt==='any'     ?'selected':''}>Any</option>
+                    <option value="contains" ${mt==='contains'?'selected':''}>Contains</option>
+                  </select>
+                </div>
+                ${mt !== 'any' ? `
+                <div style="flex:1">
+                  <label class="exp-label">${mt === 'contains' ? 'Contains' : 'Value'}</label>
+                  <input class="exp-input bldr-ws-op-meq" value="${X(op.matchEquals)}"
+                    placeholder="${mt === 'contains' ? 'partial string…' : 'expected value'}"/>
+                </div>` : ''}
+              </div>
+              <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
+                <label class="exp-label" style="margin:0;white-space:nowrap">Timeout (ms)</label>
+                <input class="exp-input bldr-ws-op-timeout" type="number" value="${op.timeoutMs||5000}" style="width:120px"/>
+              </div>
+              <div class="exp-section-header" style="margin-top:10px;padding:0">
+                <label class="exp-label" style="margin:0">Exports <span class="exp-optional">(optional)</span></label>
+                <button class="btn btn-sm bldr-ws-add-exp" data-oi="${i}">+ Add</button>
+              </div>
+              <div class="bldr-ws-exp-rows">${expRows}</div>
+            `}
+          </div>
+        </div>`;
+    }
+
+    // Render ops + footer add buttons
+    const opsHTML = s.wsOps.length === 0
+      ? `<div class="bldr-hint" style="text-align:center;padding:14px 16px">No operations yet.</div>`
+      : s.wsOps.map(opHTML).join('');
+
+    list.innerHTML = opsHTML + `
+      <div class="bldr-ws-ops-footer">
+        <button class="btn btn-sm bldr-ws-add-send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:12px;height:12px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Send
+        </button>
+        <button class="btn btn-sm bldr-ws-add-await" style="border-color:rgba(139,92,246,0.4);color:#a78bfa">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:12px;height:12px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Await
+        </button>
+        <button class="btn btn-sm bldr-ws-add-collect" style="border-color:rgba(245,158,11,0.4);color:var(--neon-warning)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:12px;height:12px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Collect
+        </button>
+      </div>`;
+
+    // Attach footer add buttons
+    list.querySelector('.bldr-ws-add-send').addEventListener('click', () => {
+      s.wsOps.push({ type: 'send', id: '', description: '', payload: '{}' });
+      renderWsOps(card, s);
+    });
+    list.querySelector('.bldr-ws-add-await').addEventListener('click', () => {
+      s.wsOps.push({ type: 'await', id: '', description: '', matchType: 'equals', matchPath: '', matchEquals: '', timeoutMs: 5000, exports: [] });
+      renderWsOps(card, s);
+    });
+    list.querySelector('.bldr-ws-add-collect').addEventListener('click', () => {
+      s.wsOps.push({ type: 'collect', id: '', description: '', timeoutMs: 3000 });
+      renderWsOps(card, s);
+    });
+
+    initJsonEditors(list);
+
+    list.querySelectorAll('[data-oi]').forEach(el => {
+      const i = +el.dataset.oi;
+      if (i >= s.wsOps.length) return;
+      const op = s.wsOps[i];
+      if (el.classList.contains('bldr-ws-op-up'))  el.addEventListener('click', () => { if (i>0) { [s.wsOps[i-1],s.wsOps[i]]=[s.wsOps[i],s.wsOps[i-1]]; renderWsOps(card,s); } });
+      if (el.classList.contains('bldr-ws-op-dn'))  el.addEventListener('click', () => { if (i<s.wsOps.length-1) { [s.wsOps[i],s.wsOps[i+1]]=[s.wsOps[i+1],s.wsOps[i]]; renderWsOps(card,s); } });
+      if (el.classList.contains('bldr-ws-op-del')) el.addEventListener('click', () => { s.wsOps.splice(i,1); renderWsOps(card,s); });
+      if (el.classList.contains('bldr-ws-add-exp')) el.addEventListener('click', () => { op.exports.push({path:'',as:''}); renderWsOps(card,s); });
+    });
+
+    list.querySelectorAll('.bldr-ws-op-card').forEach(opCard => {
+      const i = +opCard.dataset.oi;
+      if (i >= s.wsOps.length) return;
+      const op = s.wsOps[i];
+      opCard.querySelector('.bldr-ws-op-id')?.addEventListener('input',      e => { op.id          = e.target.value; });
+      opCard.querySelector('.bldr-ws-op-desc')?.addEventListener('input',    e => { op.description = e.target.value; });
+      opCard.querySelector('.bldr-ws-op-enabled')?.addEventListener('change', e => {
+        op.disabled = !e.target.checked;
+        opCard.classList.toggle('disabled', op.disabled);
+      });
+      opCard.querySelector('.bldr-ws-op-payload')?.addEventListener('input', e => { op.payload     = e.target.value; });
+      opCard.querySelector('.bldr-ws-op-mpath')?.addEventListener('input',   e => { op.matchPath   = e.target.value; });
+      opCard.querySelector('.bldr-ws-op-meq')?.addEventListener('input',     e => { op.matchEquals = e.target.value; });
+      opCard.querySelector('.bldr-ws-op-timeout')?.addEventListener('input', e => { op.timeoutMs   = +e.target.value || 5000; });
+      opCard.querySelector('.bldr-ws-op-mtype')?.addEventListener('change',  e => { op.matchType   = e.target.value; renderWsOps(card,s); });
+      opCard.querySelectorAll('.bldr-ae-row[data-ei]').forEach(row => {
+        const ei = +row.dataset.ei;
+        if (!op.exports || ei >= op.exports.length) return;
+        row.querySelector('.bldr-ws-exp-path')?.addEventListener('input', e => { op.exports[ei].path = e.target.value; });
+        row.querySelector('.bldr-ws-exp-as')?.addEventListener('input',   e => { op.exports[ei].as   = e.target.value; });
+        row.querySelector('.bldr-rm-ws-exp')?.addEventListener('click',   () => { op.exports.splice(ei,1); renderWsOps(card,s); });
+      });
+    });
+  }
+
   function attachHttp(card, s) {
     bind(card, '.bldr-http-method-sel', 'change', e => s.httpMethod = e.target.value);
     bind(card, '.bldr-url-in',          'input',  e => s.url        = e.target.value);
@@ -2386,7 +2596,7 @@ document.addEventListener('DOMContentLoaded', () => {
           endpoint: s.proxyMode ? s.proxyEndpoint : s.endpoint,
           service:  s.selectedService,
           method:   s.selectedMethod,
-          payload:  tryJSON(s.payload, {}),
+          payload:  parseJSONWithCtxPlaceholders(s.payload),
         };
         const protoFiles = s.protoFiles.split(',').map(p => p.trim()).filter(Boolean);
         if (Object.keys(meta).length) a.metadata = meta;
@@ -2399,22 +2609,41 @@ document.addEventListener('DOMContentLoaded', () => {
         const a = { method: s.httpMethod, url: s.url };
         if (Object.keys(hdrs).length) a.headers = hdrs;
         const b = s.httpBody.trim();
-        if (b) a.payload = tryJSON(b, b);
+        if (b) {
+          try { a.payload = parseJSONWithCtxPlaceholders(b); }
+          catch { a.payload = b; }
+        }
         return a;
       }
-      case 'websocket_connect': {
+      case 'websocket': {
         const hdrs = {};
         s.wsHeaders.forEach(h => { if (h.k) hdrs[h.k] = h.v; });
-        const a = { url: s.wsUrl };
+        const ops = (s.wsOps || []).map(op => {
+          // id and description come first for readability
+          const base = {};
+          if (op.id)          base.id          = op.id;
+          if (op.description) base.description = op.description;
+          if (op.disabled)    base.disabled    = true;
+          if (op.type === 'send') {
+            return { ...base, type: 'send', payload: parseJSONWithCtxPlaceholders(op.payload) };
+          }
+          if (op.type === 'collect') {
+            return { ...base, type: 'collect', timeout_ms: op.timeoutMs || 3000 };
+          }
+          const mt = op.matchType || 'equals';
+          const match = { path: op.matchPath };
+          if (mt === 'any')           { match.any = true; }
+          else if (mt === 'contains') { match.contains = op.matchEquals || ''; }
+          else                        { match.equals = parseScalar(String(op.matchEquals ?? '')); }
+          const o = { ...base, type: 'await', match, timeout_ms: op.timeoutMs || 5000 };
+          const exps = (op.exports || []).filter(e => e.path && e.as);
+          if (exps.length) o.exports = exps.map(e => ({ path: e.path, as: e.as }));
+          return o;
+        });
+        const a = { url: s.wsUrl, operations: ops };
         if (Object.keys(hdrs).length) a.headers = hdrs;
         return a;
       }
-      case 'websocket_send':
-        return { conn_id: s.wsConnId, payload: tryJSON(s.wsPayload, {}) };
-      case 'websocket_await':
-        return { conn_id: s.wsConnId, match: { path: s.wsMatchPath, equals: parseScalar(s.wsMatchEquals) }, timeout_ms: s.wsTimeoutMs };
-      case 'websocket_close':
-        return { conn_id: s.wsConnId };
       case 'db_check':
         return { driver: s.dbDriver, dsn: s.dbDsn, sql: s.dbSql };
       case 'delay':
@@ -2472,7 +2701,6 @@ document.addEventListener('DOMContentLoaded', () => {
     card.appendChild(overlay);
 
     const resultSection = card.querySelector(`#bldr-result-section-${s._id}`);
-    if (resultSection) resultSection.style.display = '';
     resultEl.innerHTML = '';
     try {
       const stepJSON = buildStepJSON(s, tcSteps.findIndex(step => step._id === s._id));
@@ -2485,21 +2713,24 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (!res.ok) {
         const msg = data.error || 'Failed';
-        renderResult(resultEl, null, msg);
+        renderStepResult(resultEl, null, msg);
         showToast(`Step ${stepIndexOf(s)} failed: ${msg}`, 'error');
         return;
       }
       s.result = data;
       // save exported values to localStorage context
       if (data.values) saveCtxValues(data.values);
-      renderResult(resultEl, data);
+      if (resultSection) {
+        resultSection.style.display = '';
+      }
+      renderStepResult(resultEl, data);
       if (data.status === 'passed') {
         showToast(`Step ${stepIndexOf(s)} passed in ${data.elapsed_ms} ms`);
       } else {
         showToast(`Step ${stepIndexOf(s)} failed${data.error ? ': ' + data.error : ''}`, 'error');
       }
     } catch(err) {
-      renderResult(resultEl, null, err.message);
+      renderStepResult(resultEl, null, err.message);
       showToast(`Step ${stepIndexOf(s)} failed: ${err.message}`, 'error');
     }
     finally {
@@ -2523,22 +2754,328 @@ document.addEventListener('DOMContentLoaded', () => {
     return index >= 0 ? index + 1 : '?';
   }
 
+  function buildStepResponseData(step) {
+    return compactObject({
+      step_id: step.step_id,
+      type: step.type,
+      status: step.status,
+      elapsed_ms: step.elapsed_ms,
+      response_summary: parseMaybeJson(step.response_summary),
+      error: step.error,
+      values: step.values
+    });
+  }
+
+  function compactObject(obj) {
+    return Object.fromEntries(
+      Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    );
+  }
+
+  function parseMaybeJson(value) {
+    if (value === undefined || value === null || value === '') return value;
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
   // ── Render step result ──
-  function renderResult(el, result, errMsg) {
+  function renderStepResult(el, result, errMsg) {
     if (errMsg) { el.innerHTML = `<div class="bldr-result-error" style="padding:10px 16px">${X(errMsg)}</div>`; return; }
     const ok     = result.status === 'passed';
-    const parsed = tryJSON(result.response_summary, null);
-    const disp   = parsed || (result.error ? {error: result.error} : {response: 'no data'});
+    const disp   = buildStepResponseData(result);
+    const opLog  = buildOperationLogData(result);
     el.innerHTML = `
       <div class="bldr-result-header" style="padding:8px 16px 6px">
         <span class="badge ${ok?'badge-success':'badge-danger'}">${ok?'PASSED':'FAILED'}</span>
         <span class="info-text">${result.elapsed_ms} ms</span>
         ${result.error ? `<span class="bldr-result-err-msg">${X(result.error)}</span>` : ''}
+        ${opLog.length ? `
+        <button class="icon-btn bldr-result-oplog-btn" type="button" title="Open operation log" aria-label="Open operation log">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon">
+            <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/>
+            <path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>
+          </svg>
+        </button>` : ''}
+        <button class="icon-btn bldr-result-tree-btn" type="button" title="Open JSON tree" aria-label="Open JSON tree">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon">
+            <path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/>
+            <path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/>
+          </svg>
+        </button>
       </div>
       <div class="code-container bldr-result-code" style="margin:0 16px 12px;max-height:600px;overflow-y:auto">
         <pre><code class="bldr-result-json"></code></pre>
       </div>`;
     hlJSON(disp, el.querySelector('.bldr-result-json'));
+    el.querySelector('.bldr-result-tree-btn')?.addEventListener('click', () => {
+      openJsonTreeDialog('Step Response', disp);
+    });
+    el.querySelector('.bldr-result-oplog-btn')?.addEventListener('click', () => {
+      openOperationLogDialog(opLog);
+    });
+  }
+
+  function buildOperationLogData(result) {
+    const rawPayload = parseMaybeJson(result.raw_payload);
+    if (Array.isArray(rawPayload?.operation_logs)) return rawPayload.operation_logs;
+
+    const action = parseMaybeJson(result.request?.action);
+    const ops = Array.isArray(action?.operations) ? action.operations : [];
+    return ops.map((op, index) => compactObject({
+      index: index + 1,
+      status: op.disabled ? 'skipped' : 'planned',
+      id: op.id,
+      type: op.type,
+      description: op.description,
+      disabled: op.disabled || undefined,
+      payload: op.payload,
+      match: op.match,
+      timeout_ms: op.timeout_ms,
+      exports: op.exports
+    }));
+  }
+
+  function openOperationLogDialog(operations) {
+    const overlay = document.createElement('div');
+    overlay.className = 'oa-json-tree-viewer-overlay';
+    const tabs = operations.map((op, index) => `
+      <button class="oa-oplog-tab ${index === 0 ? 'active' : ''} ${op.disabled || op.status === 'skipped' ? 'skipped' : ''}" type="button" data-op-idx="${index}">
+        <span>#${op.index || index + 1}</span>
+        <strong>${X(op.type || 'op')}</strong>
+        ${op.id ? `<code>${X(op.id)}</code>` : ''}
+      </button>
+    `).join('');
+    overlay.innerHTML = `
+      <div class="oa-json-tree-viewer oa-oplog-viewer glass-panel" role="dialog" aria-modal="true" aria-label="Operation Log">
+        <div class="oa-json-tree-viewer-head">
+          <div>
+            <div class="oa-json-tree-viewer-title">Operation Log</div>
+            <div class="oa-json-tree-viewer-subtitle">Inspect each WebSocket operation with the actual runtime payload and timing.</div>
+          </div>
+          <button class="icon-btn oa-json-tree-close" type="button" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="oa-oplog-tabs">${tabs || '<div class="empty-state">No operations found.</div>'}</div>
+        <div class="oa-oplog-body">
+          <div class="oa-oplog-detail"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const detail = overlay.querySelector('.oa-oplog-detail');
+
+    function renderOperation(index) {
+      const op = operations[index];
+      if (!op) {
+        detail.innerHTML = '<div class="empty-state">No operation selected.</div>';
+        return;
+      }
+      overlay.querySelectorAll('.oa-oplog-tab').forEach(tab => {
+        tab.classList.toggle('active', Number(tab.dataset.opIdx) === index);
+      });
+      detail.innerHTML = operationDetailHTML(op, index);
+    }
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    overlay.querySelector('.oa-json-tree-close')?.addEventListener('click', close);
+    overlay.querySelectorAll('.oa-oplog-tab').forEach(tab => {
+      tab.addEventListener('click', () => renderOperation(Number(tab.dataset.opIdx)));
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKeydown);
+    renderOperation(0);
+  }
+
+  function operationDetailHTML(op, index) {
+    const status = op.status || (op.disabled ? 'skipped' : 'planned');
+    const payload = op.payload !== undefined ? op.payload : parseMaybeJson(op.payload_raw);
+    const payloadText = op.payload_raw || (payload !== undefined ? JSON.stringify(payload, null, 2) : '');
+    const summaryRows = [
+      ['Operation', `#${op.index || index + 1} ${String(op.type || '').toUpperCase()}`],
+      ['Status', status],
+      ['ID', op.id],
+      ['Description', op.description],
+      ['Started At', formatOpTime(op.started_at)],
+      ['Sent At', formatOpTime(op.sent_at)],
+      ['Finished At', formatOpTime(op.finished_at)],
+      ['Elapsed', op.elapsed_ms !== undefined ? `${op.elapsed_ms} ms` : ''],
+      ['Timeout', op.timeout_ms !== undefined ? `${op.timeout_ms} ms` : ''],
+      ['Collected', op.collected_messages_count !== undefined ? `${op.collected_messages_count} message(s)` : ''],
+      ['Error', op.error],
+    ].filter(([, value]) => value !== undefined && value !== null && value !== '');
+    return `
+      <div class="oa-oplog-summary">
+        ${summaryRows.map(([label, value]) => `
+          <div class="oa-oplog-summary-row">
+            <span>${X(label)}</span>
+            <code>${X(value)}</code>
+          </div>
+        `).join('')}
+      </div>
+      ${payloadText ? `
+        <div class="oa-oplog-section-title">Payload</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(payloadText)}</code></pre>
+      ` : ''}
+      ${op.match ? `
+        <div class="oa-oplog-section-title">Match</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op.match, null, 2))}</code></pre>
+      ` : ''}
+      ${op.matched_message_raw || op.matched_message ? `
+        <div class="oa-oplog-section-title">Matched Message</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(op.matched_message_raw || JSON.stringify(op.matched_message, null, 2))}</code></pre>
+      ` : ''}
+      ${op.collected_messages_raw || op.collected_messages ? `
+        <div class="oa-oplog-section-title">Collected Messages</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(formatRawMessages(op.collected_messages_raw) || JSON.stringify(op.collected_messages, null, 2))}</code></pre>
+      ` : ''}
+      <div class="oa-oplog-section-title">Full Operation Log</div>
+      <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op, null, 2))}</code></pre>
+    `;
+  }
+
+  function formatOpTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+  }
+
+  function formatRawMessages(messages) {
+    if (!Array.isArray(messages) || !messages.length) return '';
+    return messages.map((message, index) => `// message ${index + 1}\n${message}`).join('\n\n');
+  }
+
+  function openJsonTreeDialog(title, value) {
+    const rawText = JSON.stringify(value, null, 2);
+    const overlay = document.createElement('div');
+    overlay.className = 'oa-json-tree-viewer-overlay';
+    overlay.innerHTML = `
+      <div class="oa-json-tree-viewer glass-panel" role="dialog" aria-modal="true" aria-label="${X(title)}">
+        <div class="oa-json-tree-viewer-head">
+          <div>
+            <div class="oa-json-tree-viewer-title">${X(title)}</div>
+            <div class="oa-json-tree-viewer-subtitle">Inspect response data as a collapsible JSON tree.</div>
+          </div>
+          <button class="icon-btn oa-json-tree-close" type="button" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="oa-json-tree-toolbar">
+          <div class="oa-json-tree-tabs" role="tablist">
+            <button class="oa-json-tree-tab active" type="button" data-view="tree">Tree</button>
+            <button class="oa-json-tree-tab" type="button" data-view="raw">Raw</button>
+          </div>
+          <div class="oa-json-tree-tools">
+            <button class="btn btn-sm oa-json-tree-expand" type="button">Expand All</button>
+            <button class="btn btn-sm oa-json-tree-collapse" type="button">Collapse All</button>
+            <button class="icon-btn oa-json-tree-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+            <button class="icon-btn oa-json-tree-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+        <div class="oa-json-tree-viewer-body">
+          <div class="oa-json-tree-panel">${renderResponseJsonTree(value, '', true)}</div>
+          <pre class="oa-json-raw-panel" style="display:none"><code>${hlJSONStr(rawText)}</code></pre>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const viewer = overlay.querySelector('.oa-json-tree-viewer');
+    const treePanel = overlay.querySelector('.oa-json-tree-panel');
+    const rawPanel = overlay.querySelector('.oa-json-raw-panel');
+    let fontSize = 13;
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener('keydown', onKeydown);
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape') close();
+    }
+    function setView(view) {
+      const showTree = view === 'tree';
+      treePanel.style.display = showTree ? '' : 'none';
+      rawPanel.style.display = showTree ? 'none' : '';
+      overlay.querySelectorAll('.oa-json-tree-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+      });
+    }
+    function setFontSize(next) {
+      fontSize = Math.max(11, Math.min(18, next));
+      viewer.style.setProperty('--json-tree-font-size', `${fontSize}px`);
+    }
+
+    overlay.querySelector('.oa-json-tree-close')?.addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKeydown);
+    overlay.querySelectorAll('.oa-json-tree-tab').forEach(btn => {
+      btn.addEventListener('click', () => setView(btn.dataset.view));
+    });
+    overlay.querySelector('.oa-json-tree-expand')?.addEventListener('click', () => {
+      treePanel.querySelectorAll('.oa-response-tree-node.collapsed').forEach(node => node.classList.remove('collapsed'));
+    });
+    overlay.querySelector('.oa-json-tree-collapse')?.addEventListener('click', () => {
+      treePanel.querySelectorAll('.oa-response-tree-node').forEach(node => node.classList.add('collapsed'));
+    });
+    overlay.querySelector('.oa-json-tree-zoom-out')?.addEventListener('click', () => setFontSize(fontSize - 1));
+    overlay.querySelector('.oa-json-tree-zoom-in')?.addEventListener('click', () => setFontSize(fontSize + 1));
+    treePanel.addEventListener('click', e => {
+      const toggle = e.target.closest('.oa-response-tree-toggle');
+      if (!toggle) return;
+      toggle.closest('.oa-response-tree-node')?.classList.toggle('collapsed');
+    });
+    setFontSize(fontSize);
+  }
+
+  function renderResponseJsonTree(value, key = '', root = false) {
+    const keyHTML = root ? '' : `<span class="oa-response-tree-key">${X(key)}</span><span class="oa-response-tree-colon">: </span>`;
+    if (Array.isArray(value)) {
+      const children = value.map((v, i) => renderResponseJsonTree(v, String(i))).join('');
+      return `
+        <div class="oa-response-tree-node">
+          <div class="oa-response-tree-row">
+            <button class="oa-response-tree-toggle" type="button" aria-label="Toggle node">▾</button>
+            ${keyHTML}<span class="oa-response-tree-type">Array(${value.length})</span>
+          </div>
+          <div class="oa-response-tree-children">${children}</div>
+        </div>`;
+    }
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value);
+      const children = entries.map(([k, v]) => renderResponseJsonTree(v, k)).join('');
+      return `
+        <div class="oa-response-tree-node">
+          <div class="oa-response-tree-row">
+            <button class="oa-response-tree-toggle" type="button" aria-label="Toggle node">▾</button>
+            ${keyHTML}<span class="oa-response-tree-type">Object(${entries.length})</span>
+          </div>
+          <div class="oa-response-tree-children">${children}</div>
+        </div>`;
+    }
+    return `
+      <div class="oa-response-tree-leaf">
+        <span class="oa-response-tree-spacer"></span>
+        ${keyHTML}${renderResponseTreeScalar(value)}
+      </div>`;
+  }
+
+  function renderResponseTreeScalar(value) {
+    if (typeof value === 'string') return `<span class="json-string">${X(JSON.stringify(value))}</span>`;
+    if (typeof value === 'number') return `<span class="json-number">${X(value)}</span>`;
+    if (typeof value === 'boolean') return `<span class="json-boolean">${value}</span>`;
+    if (value === null) return '<span class="json-null">null</span>';
+    return `<span class="json-string">${X(String(value))}</span>`;
   }
 
   // ── Run All ──
@@ -2571,9 +3108,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const card = stepsEl.querySelector(`[data-step-id="${step._id}"]`);
         if (!card) return;
         const resultSection = card.querySelector(`#bldr-result-section-${step._id}`);
-        if (resultSection) resultSection.style.display = '';
+        if (resultSection) {
+          resultSection.style.display = '';
+        }
         const resultEl = card.querySelector('.bldr-card-result');
-        renderResult(resultEl, sr);
+        renderStepResult(resultEl, sr);
         step.result = sr;
         if (sr.values) saveCtxValues(sr.values);
         if (sr.status === 'passed') passed++;
@@ -2597,14 +3136,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const name = document.getElementById('tc-name').value.trim();
     if (!name) { setMsg('Name is required', 'error'); return; }
     if (!tcSteps.length) { setMsg('Add at least one step', 'error'); return; }
+    // Sync all form values from DOM before building (guards against stale state)
+    syncAllFromDOM();
+    if (!validateJsonEditorsForSave()) return;
     const payload = { ...buildTC(), category: document.getElementById('tc-category').value.trim() || 'builder' };
-    setMsg('Waiting for confirmation…', '');
-    const okToSave = await showJsonConfirm(
-      'Confirm Save Test Case',
-      `Review the JSON before saving to Catalog: ${payload.category}`,
-      JSON.stringify(payload, null, 2)
-    );
-    if (!okToSave) { setMsg('', ''); return; }
     saveBtn.disabled = true; setMsg('Saving…', '');
     try {
       const res = await fetch('/api/builder/save', {
@@ -2615,21 +3150,102 @@ document.addEventListener('DOMContentLoaded', () => {
       setMsg('', '');
       showToast(`Saved "${data.id}" in ${data.category}`);
       window.reloadCatalog?.();
+      window.refreshSelectedTestCase?.(data.id, data.category);
       loadBuilderCategories();
     } catch(err) { setMsg(err.message, 'error'); }
     finally { saveBtn.disabled = false; }
   }
 
+  // Sync textarea values directly from DOM into step state, in case
+  // event listeners missed any changes (e.g. programmatic edits, paste).
+  function syncAllFromDOM() {
+    tcSteps.forEach(s => {
+      if (s.type !== 'websocket' || !s._card) return;
+      const urlEl = s._card.querySelector('.bldr-ws-url-in');
+      if (urlEl) s.wsUrl = urlEl.value;
+      s.wsOps.forEach((op, i) => {
+        const opCard = s._card.querySelector(`.bldr-ws-op-card[data-oi="${i}"]`);
+        if (!opCard) return;
+
+        const enabledEl = opCard.querySelector('.bldr-ws-op-enabled');
+        if (enabledEl) op.disabled = !enabledEl.checked;
+        const idEl = opCard.querySelector('.bldr-ws-op-id');
+        if (idEl) op.id = idEl.value;
+        const descEl = opCard.querySelector('.bldr-ws-op-desc');
+        if (descEl) op.description = descEl.value;
+        const payloadEl = opCard.querySelector('textarea.bldr-ws-op-payload');
+        if (payloadEl) op.payload = payloadEl.value;
+        const mpathEl  = opCard.querySelector('.bldr-ws-op-mpath');
+        if (mpathEl)   op.matchPath = mpathEl.value;
+        const meqEl    = opCard.querySelector('.bldr-ws-op-meq');
+        if (meqEl)     op.matchEquals = meqEl.value;
+        const timeEl   = opCard.querySelector('.bldr-ws-op-timeout');
+        if (timeEl)    op.timeoutMs = +timeEl.value || 5000;
+        opCard.querySelectorAll('.bldr-ae-row[data-ei]').forEach(row => {
+          const ei = +row.dataset.ei;
+          if (!op.exports || ei >= op.exports.length) return;
+          const pathEl = row.querySelector('.bldr-ws-exp-path');
+          if (pathEl) op.exports[ei].path = pathEl.value;
+          const asEl = row.querySelector('.bldr-ws-exp-as');
+          if (asEl) op.exports[ei].as = asEl.value;
+        });
+      });
+    });
+    // Sync grpc payload too
+    tcSteps.forEach(s => {
+      if (s.type !== 'grpc_unary' || !s._card) return;
+      const payloadEl = s._card.querySelector('.bldr-payload-ta');
+      if (payloadEl) s.payload = payloadEl.value;
+    });
+  }
+
+  function validateJsonEditorsForSave() {
+    const editors = document.querySelectorAll('#builder-view textarea[data-json-editor]');
+    for (const editor of editors) {
+      const raw = editor.value.trim();
+      if (!raw) continue;
+      try {
+        parseJSONWithCtxPlaceholders(raw);
+      } catch (err) {
+        const message = `Invalid JSON: ${err.message}.`;
+        setMsg(message, 'error');
+        showToast(message, 'error');
+        editor.focus();
+        return false;
+      }
+    }
+    return true;
+  }
+
   function buildTC() {
+    const name = document.getElementById('tc-name').value.trim();
+    const idInput = document.getElementById('tc-id').value.trim();
     return {
-      id:          slugTC(document.getElementById('tc-name').value),
-      name:        document.getElementById('tc-name').value.trim(),
+      id:          idInput || slugTC(name),
+      name,
       description: document.getElementById('tc-description').value.trim(),
       order:       tcOrder,
       config:      { timeout_ms: +document.getElementById('tc-timeout').value || 30000 },
       steps:       tcSteps.map((step, index) => buildStepJSON(step, index)),
     };
   }
+
+  // Auto-sync ID from name when ID hasn't been manually overridden
+  (() => {
+    let idManuallyEdited = false;
+    const nameEl = document.getElementById('tc-name');
+    const idEl   = document.getElementById('tc-id');
+    if (!nameEl || !idEl) return;
+    nameEl.addEventListener('input', () => {
+      if (!idManuallyEdited) idEl.value = slugTC(nameEl.value);
+    });
+    idEl.addEventListener('input', () => { idManuallyEdited = true; });
+    idEl.addEventListener('blur',  () => {
+      if (!idEl.value.trim()) { idManuallyEdited = false; idEl.value = slugTC(nameEl.value); }
+    });
+    // Expose reset for loadInBuilder / resetBuilder
+    window._resetTcIdTracking = () => { idManuallyEdited = false; };
+  })();
 
   function setMsg(msg, type) {
     saveMsgEl.textContent = msg;
@@ -2704,9 +3320,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Populate TC header
     document.getElementById('tc-name').value        = tc.name        || '';
+    document.getElementById('tc-id').value          = tc.id          || '';
     document.getElementById('tc-description').value = tc.description || '';
     document.getElementById('tc-category').value    = tc.category    || '';
     document.getElementById('tc-timeout').value     = tc.config?.timeout_ms || 30000;
+    window._resetTcIdTracking?.(); // mark as "set from original, not manually edited"
 
     // Clear existing steps
     tcSteps = []; stepSeq = 0;
@@ -2743,8 +3361,7 @@ document.addEventListener('DOMContentLoaded', () => {
       services: [], selectedService: '', selectedMethod: '',
       metadata: [], protoFiles: '', payload: '{}',
       httpMethod: 'GET', url: '', headers: [], httpBody: '',
-      wsUrl: '', wsHeaders: [], wsConnId: '', wsPayload: '{}',
-      wsMatchPath: '', wsMatchEquals: '', wsTimeoutMs: 5000,
+      wsUrl: '', wsHeaders: [], wsOps: [],
       dbDriver: 'postgres', dbDsn: '', dbSql: '',
       durationMs: 1000, includePath: '', groupFile: '',
       fakeGrpcPort: 19091, fakeGrpcProtos: '', fakeGrpcResponses: '{}', fakeGrpcAddr: '',
@@ -2776,21 +3393,35 @@ document.addEventListener('DOMContentLoaded', () => {
         s.headers    = Object.entries(a.headers||{}).map(([k,v])=>({k,v}));
         s.httpBody   = a.payload ? JSON.stringify(a.payload, null, 2) : '';
         break;
-      case 'websocket_connect':
+      case 'websocket':
         s.wsUrl     = a.url || '';
-        s.wsHeaders = Object.entries(a.headers||{}).map(([k,v])=>({k,v}));
+        s.wsHeaders = Object.entries(a.headers || {}).map(([k,v]) => ({k,v}));
+        s.wsOps     = (a.operations || []).map(op => {
+          const base = { id: op.id || '', description: op.description || '', disabled: !!op.disabled };
+          if (op.type === 'send') {
+            return { ...base, type: 'send', payload: op.payload ? JSON.stringify(op.payload, null, 2) : '{}' };
+          }
+          if (op.type === 'collect') {
+            return { ...base, type: 'collect', timeoutMs: op.timeout_ms || 3000 };
+          }
+          // Detect match type from the stored JSON
+          let matchType = 'equals';
+          if (op.match?.any)                        matchType = 'any';
+          else if (op.match?.contains !== undefined) matchType = 'contains';
+          const matchEquals = matchType === 'contains'
+            ? (op.match?.contains || '')
+            : String(op.match?.equals ?? '');
+          return {
+            ...base,
+            type:        'await',
+            matchType,
+            matchPath:   op.match?.path || '',
+            matchEquals,
+            timeoutMs:   op.timeout_ms  || 5000,
+            exports:     (op.exports || []).map(e => ({ path: e.path || '', as: e.as || '' })),
+          };
+        });
         break;
-      case 'websocket_send':
-        s.wsConnId  = a.conn_id || '';
-        s.wsPayload = a.payload ? JSON.stringify(a.payload, null, 2) : '{}';
-        break;
-      case 'websocket_await':
-        s.wsConnId      = a.conn_id || '';
-        s.wsMatchPath   = a.match?.path  || '';
-        s.wsMatchEquals = String(a.match?.equals ?? '');
-        s.wsTimeoutMs   = a.timeout_ms   || 5000;
-        break;
-      case 'websocket_close':   s.wsConnId       = a.conn_id   || ''; break;
       case 'db_check':          s.dbDriver = a.driver||'postgres'; s.dbDsn = a.dsn||''; s.dbSql = a.sql||''; break;
       case 'delay':             s.durationMs     = a.duration_ms || 1000; break;
       case 'include':           s.includePath    = a.file_path || ''; break;
@@ -2827,6 +3458,50 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.addEventListener(evt, fn);
   }
   function tryJSON(str, fallback) { try { return JSON.parse(str); } catch { return fallback; } }
+  function parseJSONWithCtxPlaceholders(str) {
+    const raw = String(str ?? '').trim();
+    if (!raw) return {};
+    try { return JSON.parse(raw); }
+    catch (firstErr) {
+      const normalized = quoteBareCtxPlaceholders(raw);
+      if (normalized === raw) throw firstErr;
+      return JSON.parse(normalized);
+    }
+  }
+  function quoteBareCtxPlaceholders(str) {
+    let out = '';
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (inString) {
+        out += ch;
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        out += ch;
+        continue;
+      }
+      if (str.startsWith('${ctx.', i)) {
+        const end = str.indexOf('}', i);
+        if (end !== -1) {
+          out += `"${str.slice(i, end + 1)}"`;
+          i = end;
+          continue;
+        }
+      }
+      out += ch;
+    }
+    return out;
+  }
   function parseScalar(s) {
     s = String(s).trim();
     if (s==='true') return true; if (s==='false') return false; if (s==='null') return null;
@@ -2927,6 +3602,82 @@ document.addEventListener('DOMContentLoaded', () => {
       m => { let c='json-number'; if(/^"/.test(m)) c=/:$/.test(m)?'json-key':'json-string'; else if(/true|false/.test(m)) c='json-boolean'; else if(/null/.test(m)) c='json-null'; return `<span class="${c}">${m}</span>`; }
     );
   }
+
+  // ── JSON editor overlay ──
+  function hlJSONStr(str) {
+    if (!str.trim()) return '\n';
+    // HTML-escape first to prevent broken rendering
+    const safe = str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return safe.replace(
+      /("(?:\\u[0-9a-fA-F]{4}|\\[^u]|[^"\\])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      m => {
+        let c = 'json-number';
+        if (/^"/.test(m))       c = /:\s*$/.test(m) ? 'json-key' : 'json-string';
+        else if (/^true$|^false$/.test(m)) c = 'json-boolean';
+        else if (m === 'null')  c = 'json-null';
+        return `<span class="${c}">${m}</span>`;
+      }
+    );
+  }
+
+  function initJsonEditors(container) {
+    if (!container) return;
+    container.querySelectorAll('textarea[data-json-editor]:not([data-je])').forEach(ta => {
+      ta.dataset.je = '1';
+
+      const minH = ta.style.minHeight || '120px';
+
+      // Build wrapper + highlight pre
+      const wrap = document.createElement('div');
+      wrap.className = 'oa-json-wrap';
+      wrap.style.minHeight = minH;
+
+      const pre  = document.createElement('pre');
+      pre.className = 'oa-json-pre';
+      const code = document.createElement('code');
+      pre.appendChild(code);
+
+      // Insert wrapper in place of textarea
+      ta.parentNode.insertBefore(wrap, ta);
+      wrap.appendChild(pre);
+      wrap.appendChild(ta);
+
+      // Make textarea transparent (overlay)
+      ta.classList.add('oa-json-ta');
+      ta.style.minHeight = minH;
+
+      function update() {
+        code.innerHTML = hlJSONStr(ta.value);
+        pre.scrollTop  = ta.scrollTop;
+        pre.scrollLeft = ta.scrollLeft;
+      }
+      function syncHeight() {
+        const h = Math.max(ta.scrollHeight, parseInt(minH) || 120);
+        wrap.style.height = h + 'px';
+        pre.style.height  = h + 'px';
+        ta.style.height   = h + 'px';
+      }
+
+      ta.addEventListener('input',  () => { update(); syncHeight(); });
+      ta.addEventListener('scroll', () => { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; });
+      ta.addEventListener('keydown', e => {
+        // Tab inserts 2 spaces instead of losing focus
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const s = ta.selectionStart, end = ta.selectionEnd;
+          ta.value = ta.value.substring(0,s) + '  ' + ta.value.substring(end);
+          ta.selectionStart = ta.selectionEnd = s + 2;
+          update();
+          syncHeight();
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      });
+
+      update();
+      syncHeight();
+    });
+  }
+
   function slugTC(name) {
     return name.toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'untitled';
   }

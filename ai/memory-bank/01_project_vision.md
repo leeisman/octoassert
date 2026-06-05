@@ -18,9 +18,9 @@
 
 ## 支援的協議與 Executor
 
-- **gRPC Unary**：透過 Server Reflection 動態解析服務與 method，支援 proxy 模式（x-server-id routing）。
+- **gRPC Unary**：透過 Server Reflection 或 proto files 動態解析服務與 method，支援直連與 proxy 模式；proxy metadata 由 test case 設定，不在程式碼寫死。
 - **HTTP Request**：標準 RESTful API 呼叫。
-- **WebSocket**：connect / send / await / close 四種 step type，背景佇列機制。
+- **WebSocket**：單一 `websocket` step 內含 ordered `operations`，支援 `send` / `await` / `collect`、operation disable、背景佇列與 per-operation runtime log。
 - **DB Check**：postgres / mysql / sqlite，內部狀態白盒驗證。
 - **Delay / Include / Group**：流程控制與步驟複用。
 - **Fake gRPC / Fake HTTP Server**：本地假服務，隔離外部依賴。

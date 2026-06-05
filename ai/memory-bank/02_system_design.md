@@ -42,11 +42,13 @@ Test case 的 source of truth，以本地 JSON 描述測試步驟與預期結果
 
 ### gRPC Unary
 
-採用 `jhump/protoreflect` 動態引擎，透過 **Server Reflection** 解析服務與 method，不需要提前編譯 `.proto` 檔案。
+採用 `jhump/protoreflect` 動態引擎，透過 **Server Reflection** 或 test case 指定的 `proto_files` 解析服務與 method。Proxy metadata 由 test case 設定，不在 executor 寫死。
 
 ### WebSocket
 
-內建背景 goroutine 與記憶體佇列，支援 connect / send / await / close 四種 step type。`await` 採先進先出配對截斷策略。
+使用單一 `websocket` step 管理完整連線生命週期。Step 內的 `operations` 依序執行 `send`、`await`、`collect`，並支援 `disabled` 暫時跳過。Executor 內建背景 goroutine 與記憶體佇列；`await` 採先進先出配對截斷策略，`collect` 等待完整 timeout 後收集 queued messages。
+
+WebSocket executor 會在 `StepResult.raw_payload.operation_logs` 寫入每個 operation 的 runtime log，包含實際送出的 payload、送出時間、match/collect 結果與 raw received messages。Outbound payload 送出前會將 `Type` / `type` 排為第一欄，以便符合 protocol/log 檢查需求。
 
 ### HTTP
 
@@ -68,7 +70,7 @@ Test case 的 source of truth，以本地 JSON 描述測試步驟與預期結果
 
 ## Runner 分工
 
-- **Runner Orchestrator**：步驟調度、跨步驟 context 管理（`${ctx.xxx}` 注入）、assert 與 export 處理、結果彙整
+- **Runner Orchestrator**：步驟調度、跨步驟 context 管理（`${ctx.xxx}` typed injection）、assert 與 export 處理、結果彙整
 - 各 executor 只負責自己的 step type，不知道 runner 存在
 
 後續新增 step 類型應新增 executor，不修改 orchestrator。

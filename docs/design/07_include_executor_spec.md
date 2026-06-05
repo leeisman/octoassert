@@ -27,7 +27,7 @@
 
 ```json
 {
-  "step_id": "setup_room",
+  "step_id": "1",
   "type": "include",
   "description": "執行建房與啟動的共用流程",
   "action": {
@@ -48,7 +48,7 @@
 
 ```json
 {
-  "step_id": "load_env",
+  "step_id": "1",
   "type": "include",
   "description": "載入本地環境設定",
   "action": {
@@ -92,8 +92,9 @@ db:
 {
   "steps": [
     {
-      "step_id": "load_env",
+      "step_id": "1",
       "type": "include",
+      "description": "Load local environment config",
       "action": { "file_path": "config/local.yaml" },
       "exports": [
         { "path": "lobby.ws_url",  "as": "ctx.ws_url" },
@@ -101,12 +102,22 @@ db:
       ]
     },
     {
-      "step_id": "connect_lobby",
-      "type": "websocket_connect",
-      "action": { "url": "${ctx.ws_url}?token=${ctx.token}" }
+      "step_id": "2",
+      "type": "websocket",
+      "description": "Connect lobby websocket and wait for ready event",
+      "action": {
+        "url": "${ctx.ws_url}?token=${ctx.token}",
+        "operations": [
+          {
+            "type": "await",
+            "match": { "path": "event_name", "equals": "Ready" },
+            "timeout_ms": 5000
+          }
+        ]
+      }
     },
     {
-      "step_id": "revive_room",
+      "step_id": "3",
       "type": "grpc_unary",
       "action": {
         "endpoint": "${ctx.baccarat_grpc}",

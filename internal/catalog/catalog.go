@@ -167,25 +167,25 @@ func (c *Catalog) moveToTrash(sourcePath string) error {
 	now := time.Now()
 	dateStr := now.Format("2006-01-02")
 	timeStr := now.Format("150405")
-	
+
 	projectRoot := filepath.Dir(c.root)
 	trashDir := filepath.Join(projectRoot, "trash", dateStr)
-	
+
 	if err := os.MkdirAll(trashDir, 0o755); err != nil {
 		return err
 	}
-	
+
 	baseName := filepath.Base(sourcePath)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	
+
 	var newName string
 	if ext != "" {
 		newName = fmt.Sprintf("%s_%s%s", nameWithoutExt, timeStr, ext)
 	} else {
 		newName = fmt.Sprintf("%s_%s", baseName, timeStr)
 	}
-	
+
 	targetPath := filepath.Join(trashDir, newName)
 	return os.Rename(sourcePath, targetPath)
 }
@@ -249,12 +249,12 @@ func (c *Catalog) Move(id, oldCategory, newCategory string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	cleanNew, err := cleanCategory(newCategory)
 	if err != nil {
 		return err
 	}
-	
+
 	newDir := filepath.Join(c.root, filepath.FromSlash(cleanNew))
 	if err := ensureInsideRoot(c.root, newDir); err != nil {
 		return err
@@ -262,16 +262,16 @@ func (c *Catalog) Move(id, oldCategory, newCategory string) error {
 	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		return err
 	}
-	
+
 	newPath := filepath.Join(newDir, tc.ID+".json")
 	if err := ensureInsideRoot(c.root, newPath); err != nil {
 		return err
 	}
-	
+
 	if tc.SourcePath == newPath {
 		return nil // already there
 	}
-	
+
 	if err := os.Rename(tc.SourcePath, newPath); err != nil {
 		return err
 	}
@@ -285,11 +285,19 @@ func (c *Catalog) Save(tc testcase.TestCase, category string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	existing, err := c.GetInCategory(tc.ID, category)
+	var filePath string
+	if err == nil && existing.SourcePath != "" {
+		filePath = existing.SourcePath
+	} else {
+		filePath = filepath.Join(dir, tc.ID+".json")
+	}
+
 	data, err := json.MarshalIndent(tc, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, tc.ID+".json"), data, 0o644)
+	return os.WriteFile(filePath, data, 0o644)
 }
 
 func categoryFor(root, path string) (string, error) {

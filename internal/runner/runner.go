@@ -21,11 +21,15 @@ func New(registry *Registry) *Runner {
 }
 
 func (r *Runner) Run(ctx context.Context, tc testcase.TestCase) RunResult {
-	runCtx := NewExecutionContext()
-	return r.RunWithContext(ctx, runCtx, tc)
+	return r.RunWithCallback(ctx, tc, nil)
 }
 
-func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, tc testcase.TestCase) RunResult {
+func (r *Runner) RunWithCallback(ctx context.Context, tc testcase.TestCase, cb func(int, string)) RunResult {
+	runCtx := NewExecutionContext()
+	return r.RunWithContext(ctx, runCtx, tc, cb)
+}
+
+func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, tc testcase.TestCase, cb func(int, string)) RunResult {
 	started := time.Now()
 	result := RunResult{
 		TestCaseID: tc.ID,
@@ -33,7 +37,10 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 		StartedAt:  started,
 	}
 
-	for _, step := range tc.Steps {
+	for i, step := range tc.Steps {
+		if cb != nil {
+			cb(i, "running")
+		}
 		executor, ok := r.registry.Get(step.Type)
 		if !ok {
 			stepResult := failedStep(step, fmt.Errorf("executor not registered: %s", step.Type))
@@ -44,7 +51,7 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 
 		// Inject context variables into Action payload before execution
 		if len(step.Action) > 0 {
-			step.Action = injectContext(step.Action, runCtx)
+			step.Action = InjectContext(step.Action, runCtx)
 		}
 
 		stepResult := executor.Execute(ctx, runCtx, step)
@@ -91,6 +98,13 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 		}
 
 		result.Steps = append(result.Steps, stepResult)
+		if cb != nil {
+			if stepResult.Status == StatusPassed {
+				cb(i, "passed")
+			} else {
+				cb(i, "failed")
+			}
+		}
 		if stepResult.Status != StatusPassed {
 			result.Status = StatusFailed
 			break
@@ -114,8 +128,8 @@ func failedStep(step testcase.Step, err error) StepResult {
 	}
 }
 
-// injectContext scans the raw JSON action for ${ctx.xxx} and replaces it with values from the context pool.
-func injectContext(action []byte, runCtx *ExecutionContext) []byte {
+// InjectContext scans the raw JSON action for ${ctx.xxx} and replaces it with values from the context pool.
+func InjectContext(action []byte, runCtx *ExecutionContext) []byte {
 	var parsed any
 	if err := json.Unmarshal(action, &parsed); err == nil {
 		replaced := replaceContextValue(parsed, runCtx)
@@ -132,7 +146,7 @@ func injectContext(action []byte, runCtx *ExecutionContext) []byte {
 		if len(match) == 2 {
 			fullMatch := match[0]
 			varName := match[1]
-			if val, ok := runCtx.Get("ctx." + varName); ok {
+			if val, ok := resolveContextValue(varName, runCtx); ok {
 				actionStr = strings.ReplaceAll(actionStr, fullMatch, fmt.Sprint(val))
 			}
 		}
@@ -162,7 +176,7 @@ func replaceContextValue(value any, runCtx *ExecutionContext) any {
 func replaceContextString(value string, runCtx *ExecutionContext) any {
 	re := regexp.MustCompile(`^\$\{ctx\.([^}]+)\}$`)
 	if match := re.FindStringSubmatch(value); len(match) == 2 {
-		if val, ok := runCtx.Get("ctx." + match[1]); ok {
+		if val, ok := resolveContextValue(match[1], runCtx); ok {
 			return val
 		}
 		return value
@@ -174,9 +188,22 @@ func replaceContextString(value string, runCtx *ExecutionContext) any {
 		if len(match) != 2 {
 			return token
 		}
-		if val, ok := runCtx.Get("ctx." + match[1]); ok {
+		if val, ok := resolveContextValue(match[1], runCtx); ok {
 			return fmt.Sprint(val)
 		}
 		return token
 	})
+}
+
+func resolveContextValue(name string, runCtx *ExecutionContext) (any, bool) {
+	candidates := []string{"ctx." + name, name}
+	if strings.HasPrefix(name, "ctx.") {
+		candidates = append(candidates, strings.TrimPrefix(name, "ctx."))
+	}
+	for _, candidate := range candidates {
+		if val, ok := runCtx.Get(candidate); ok {
+			return val, true
+		}
+	}
+	return nil, false
 }

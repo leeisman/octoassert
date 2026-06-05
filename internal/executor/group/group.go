@@ -28,11 +28,11 @@ func (e *Executor) Type() string { return "group" }
 func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext, step testcase.Step) runner.StepResult {
 	started := time.Now()
 	res := runner.StepResult{
-		StepID:   step.StepID,
+		StepID:      step.StepID,
 		Description: step.Description,
-		Type:      step.Type,
-		StartedAt: started,
-		Status:    runner.StatusPassed,
+		Type:        step.Type,
+		StartedAt:   started,
+		Status:      runner.StatusPassed,
 	}
 
 	action, err := runner.DecodeAction[Action](step)
@@ -71,11 +71,22 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 		ID:    gf.Name,
 		Steps: gf.Steps,
 	}
-	subResult := subRunner.RunWithContext(ctx, runCtx, subTC)
+	subResult := subRunner.RunWithContext(ctx, runCtx, subTC, nil)
 
 	if subResult.Status != runner.StatusPassed {
 		res.Status = runner.StatusFailed
 		res.Error = fmt.Sprintf("group %q failed", gf.Name)
+	}
+
+	// Bubble up all exported context values from sub-steps so the frontend
+	// can persist them in localStorage and subsequent steps can use them.
+	for _, step := range subResult.Steps {
+		for k, v := range step.Values {
+			if res.Values == nil {
+				res.Values = make(map[string]any)
+			}
+			res.Values[k] = v
+		}
 	}
 
 	res.ResponseSummary = fmt.Sprintf(`{"group":"%s","status":"%s"}`, gf.Name, subResult.Status)

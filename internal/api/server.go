@@ -163,7 +163,7 @@ func (s *Server) handleReorderTestCases(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	
+
 	changed := 0
 	for i, id := range req.IDs {
 		tc, err := s.catalog.GetInCategory(id, req.Category)
@@ -326,9 +326,25 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	result := s.runner.Run(ctx, tc)
-	s.store.Save(result)
-	writeJSON(w, result)
+	flusher, isStreaming := w.(http.Flusher)
+	if r.Header.Get("Accept") == "application/x-ndjson" && isStreaming {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+
+		result := s.runner.RunWithCallback(ctx, tc, func(idx int, status string) {
+			json.NewEncoder(w).Encode(map[string]any{"type": "progress", "index": idx, "status": status})
+			flusher.Flush()
+		})
+		s.store.Save(result)
+		json.NewEncoder(w).Encode(map[string]any{"type": "complete", "result": result})
+		flusher.Flush()
+	} else {
+		result := s.runner.Run(ctx, tc)
+		s.store.Save(result)
+		writeJSON(w, result)
+	}
 }
 
 func (s *Server) handleBrowseFiles(w http.ResponseWriter, r *http.Request) {

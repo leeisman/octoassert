@@ -1,121 +1,261 @@
 # OctoAssert
 
-🚀 **OctoAssert** 是一個專為現代微服務架構打造的**多協議端對端 (E2E) API 自動化測試引擎**。
+OctoAssert is a local Web UI for building, running, and debugging multi-protocol API test cases.
 
-它能讓你輕鬆編排橫跨 **gRPC、HTTP、WebSocket 與資料庫 (DB)** 的複雜測試劇本，並提供極具未來感的 **「深色毛玻璃 (Glassmorphism)」Web UI**，讓測試流程不再是枯燥的程式碼，而是清晰可見、可視覺化編輯的活文件！
+It is designed for backend and game-service workflows where one scenario may need to call HTTP, gRPC, WebSocket, DB checks, fake servers, and reusable groups in a single executable test case.
 
----
+## Highlights
 
-## ✨ 核心特色 (Highlights)
+- Web UI first: browse the catalog, edit test cases, run steps, inspect results, and save changes from the browser.
+- JSON test cases: all test definitions live under `testcases/` and can be versioned with the project.
+- Multi-protocol execution: `grpc_unary`, `http_request`, `websocket`, `db_check`, `delay`, `include`, `group`, `fake_grpc_start`, `fake_grpc_stop`, `fake_http_start`, and `fake_http_stop`.
+- Context passing: exports write values such as `ctx.roomid`; later steps can use `${ctx.roomid}`.
+- WebSocket operation logs: each WebSocket step records per-operation runtime details, including sent payload, sent time, match results, collected messages, skipped operations, and elapsed time.
+- Catalog management: folder-based categories, duplicate, delete, multi-select actions, drag sorting, expand/collapse, and edit-in-builder.
+- Builder ergonomics: step drag reorder, run one step, run all, JSON validation, context autocomplete, operation disable toggles, and save confirmation.
 
-- **🌟 旗艦級 Web UI**
-  - 內建精美的深色模式 Web 介面（透過 `go:embed` 無縫打包進執行檔）。
-  - **左右並排的 Horizontal Collapse 佈局**：左側編輯設定，右側高亮顯示高達 600px 的巨型 JSON 執行結果，完美支援寬螢幕。
-  - 右鍵選單支援快速複製、執行與進入 Test Case Builder 編輯。
-- **🔌 真正的多協議支援 (Multi-Protocol)**
-  - **gRPC Unary**：內建 Server Reflection 動態反射機制，**無需預先編譯或上傳 `.proto` 檔案**，直接呼叫！
-  - **WebSocket**：獨創背景 Goroutine 與記憶體佇列，完美解決非同步推播的驗證難題（支援 `connect`, `send`, `await`, `close` 流程）。
-  - **RESTful HTTP**：標準 HTTP API 呼叫支援。
-  - **DB Check (White-box Testing)**：支援原生 Postgres、MySQL、SQLite 查詢，並透過**動態指標映射 (Dynamic Row Mapping)** 直接把查詢結果轉為 JSON 供斷言。
-- **🤖 內建 Fake Servers**
-  - 不依賴外部環境！內建 `fake_http_server` 與 `fake_grpc_server`，測試劇本可以自行啟動假伺服器來模擬相依服務的回應。
-- **💡 測試即文件 (Test as Documentation)**
-  - 使用純 JSON 宣告式語法編寫測試，並透過 `${ctx.xxx}` 跨步驟傳遞變數（Exports）。
-
----
-
-## 🚀 快速開始 (Quick Start)
-
-你只需要安裝好 Go 環境，即可一鍵啟動：
+## Quick Start
 
 ```bash
-# 啟動（使用 SQLite 持久化儲存測試紀錄）
 make serve
+```
 
-# 啟動（使用 In-Memory 模式，重啟後清空紀錄）
+Open:
+
+```text
+http://127.0.0.1:7788
+```
+
+Use in-memory run storage instead of SQLite:
+
+```bash
 make serve-mem
 ```
 
-啟動後，請開啟瀏覽器前往：**[http://127.0.0.1:7788](http://127.0.0.1:7788)** ，迎接你的全新測試體驗！
+Run tests:
 
----
+```bash
+make test
+```
 
-## 🛠 支援的執行器字典 (Executor Types)
+Manual server command:
 
-| 執行器類型 | 說明 |
-|---|---|
-| `grpc_unary` | 執行 gRPC Unary 呼叫，支援動態 Server Reflection。 |
-| `http_request` | 執行標準 HTTP RESTful API 請求。 |
-| `websocket_connect` | 建立 WebSocket 連線，產生背景守護行程負責收發訊息。 |
-| `websocket_send` | 透過已建立的 WebSocket 連線發送訊息。 |
-| `websocket_await` | 阻塞等待符合特定 JSONPath 條件的 WebSocket 推播訊息。 |
-| `websocket_close` | 關閉連線並清理背景資源。 |
-| `db_check` | 執行 SQL 查詢驗證資料庫內部狀態。 |
-| `delay` | 讓測試流程暫停指定的毫秒數。 |
-| `include` | 載入 YAML Config，或插入其他 JSON Test Case 作為 Sub-routine。 |
-| `group` | 引入共用步驟群組，避免重複撰寫相同的流程。 |
-| `fake_grpc_start` | 啟動本機假 gRPC Server，依據設定回傳 Mock JSON。 |
-| `fake_http_start` | 啟動本機假 HTTP Server，依據路由回傳 Mock JSON。 |
+```bash
+go run . server console --addr 127.0.0.1:7788 --db data/runs.db
+```
 
----
+## Test Case Layout
 
-## 📝 Test Case 語法範例
+Catalog categories are derived from folders, not from a JSON field.
 
-Test Case 統一以 JSON 格式儲存於 `testcases/` 目錄下，納入 Git 版本控制，與程式碼共存亡。
+```text
+testcases/
+  baccarat/
+    player/
+      player_websocket_operations.json
+    groups/
+      login.json
+  fake/
+    sample/
+      sample_grpc.json
+```
+
+For example, `testcases/baccarat/player/player_websocket_operations.json` appears in catalog `baccarat/player`.
+
+## Test Case Schema
 
 ```json
 {
-  "id": "revive_baccarat_room",
-  "name": "Revive Baccarat Room",
-  "description": "呼叫 ReviveRoom 讓指定房間恢復運行",
-  "config": { "timeout_ms": 10000 },
+  "id": "player_websocket_operations",
+  "name": "Player WebSocket Operations",
+  "description": "Login, connect WebSocket, send player operations, and inspect pushed messages.",
+  "config": {
+    "timeout_ms": 15000
+  },
   "steps": [
     {
-      "step_id": "call",
-      "type": "grpc_unary",
+      "step_id": "1",
+      "type": "group",
+      "description": "Reuse login group and export ticket",
       "action": {
-        "endpoint": "localhost:50052",
-        "service": "cbm.ClassicalBaccarat",
-        "method": "ReviveRoom",
-        "payload": { "room_serial": 1 }
-      },
-      "asserts": [
-        { "type": "json_path", "path": "grpc_code", "expect": "OK" }
-      ],
-      "exports": [
-        { "path": "response.status", "as": "ctx.room_status" }
-      ]
+        "file": "testcases/baccarat/groups/login.json"
+      }
+    },
+    {
+      "step_id": "2",
+      "type": "websocket",
+      "description": "Connect with ticket and subscribe to room",
+      "action": {
+        "url": "ws://127.0.0.1:8080/api/v1/external/connect?ticket=${ctx.ticket}",
+        "operations": [
+          {
+            "id": "1",
+            "description": "Wait for page push",
+            "type": "await",
+            "match": {
+              "path": "Type",
+              "equals": "presence.page"
+            },
+            "timeout_ms": 5000,
+            "exports": [
+              {
+                "path": "Payload.E.0.S",
+                "as": "ctx.roomid"
+              }
+            ]
+          },
+          {
+            "id": "2",
+            "description": "Subscribe to exported room",
+            "type": "send",
+            "payload": {
+              "Type": "subscribe",
+              "Room": "${ctx.roomid}"
+            }
+          },
+          {
+            "id": "3",
+            "description": "Collect pushed messages",
+            "type": "collect",
+            "timeout_ms": 10000
+          }
+        ]
+      }
     }
   ]
 }
 ```
 
-> **變數傳遞小技巧**：在上述 `exports` 中，可以將 Response 提取存入 Context，隨後在後面的步驟中使用 `${ctx.room_status}` 取出，輕鬆串聯複雜的業務邏輯！
+## Context Placeholders
 
----
+Exports should usually store names with the `ctx.` prefix:
 
-## 📂 專案結構
+```json
+{
+  "path": "Payload.E.0.S",
+  "as": "ctx.roomid"
+}
+```
+
+Later payloads can reference that value:
+
+```json
+{
+  "Type": "subscribe",
+  "Room": "${ctx.roomid}"
+}
+```
+
+The runner preserves the exported value type. If `ctx.roomid` is numeric, the sent payload will contain a numeric `Room`, not a string.
+
+In the Test Case Builder payload editor, unquoted context placeholders are also accepted for convenience:
+
+```json
+{
+  "Type": "subscribe",
+  "Room": ${ctx.roomid}
+}
+```
+
+Before save/run, the UI normalizes this to a valid JSON placeholder and the runner injects the typed value at execution time.
+
+## WebSocket Operations
+
+A `websocket` step opens one connection, runs `operations` sequentially, then closes the connection.
+
+Supported operation types:
+
+| Type | Behavior |
+| --- | --- |
+| `send` | Sends a JSON payload. Context placeholders are injected immediately before write. |
+| `await` | Waits until a queued message matches `match`. Matching messages are consumed from the queue. |
+| `collect` | Waits the full timeout and returns all messages received in that window. |
+
+Operations can be temporarily skipped:
+
+```json
+{
+  "id": "2",
+  "type": "send",
+  "disabled": true,
+  "payload": {
+    "Type": "subscribe",
+    "Room": "${ctx.roomid}"
+  }
+}
+```
+
+The Web UI exposes this as a `Run` checkbox on each operation. Unchecking it saves `disabled: true`.
+
+For outbound WebSocket payloads, `Type` or `type` is ordered as the first JSON field before sending. This keeps runtime logs and protocol-sensitive systems aligned with expected payload order.
+
+## Operation Log
+
+After running a WebSocket step in the builder, the Step Response header includes:
+
+- Operation Log: tabbed per-operation runtime log.
+- Open JSON Tree: collapsible response viewer.
+
+The Operation Log shows:
+
+- operation id/type/status
+- start, sent, finish time
+- elapsed time
+- actual sent payload
+- match configuration
+- matched message
+- collected messages
+- full raw operation log JSON
+
+Collected and matched messages are displayed from raw WebSocket frames when available, so field order matches what was actually received instead of a re-stringified object.
+
+## Catalog And Builder
+
+Catalog behavior:
+
+- Categories come from folders under `testcases/`.
+- Test cases can live at root or nested paths.
+- Supports duplicate, delete, bulk delete/move, folder delete, drag sorting, expand all, collapse all, and edit in builder.
+
+Builder behavior:
+
+- `step_id` is auto-numbered as `"1"`, `"2"`, `"3"`, etc.
+- Human-readable meaning belongs in `description`.
+- Steps can be dragged to reorder.
+- WebSocket operations can be reordered and disabled.
+- JSON editors validate before save, with support for context placeholders.
+- Save and run actions use toast notifications.
+
+## Project Structure
 
 ```text
 /
-├── config/          # 環境設定（供 include 載入）
-├── testcases/       # JSON Test Case 腳本目錄（進版控）
-├── docs/design/     # 各模組的詳細規格書
-├── ai/memory-bank/  # AI 輔助開發的架構脈絡與上下文
+├── ai/                       # AI collaboration instructions and memory bank
+├── config/                   # Environment/config files used by include steps
+├── data/                     # Local run store, usually ignored
+├── docs/design/              # Design specs for catalog, executors, Web UI, and store
 ├── internal/
-│   ├── api/         # Web UI 後端 API 與靜態資源 (go:embed)
-│   ├── catalog/     # 負責掃描與解析 Test Case
-│   ├── runner/      # 核心調度引擎 (Runner Orchestrator)
-│   ├── executor/    # 10+ 種以上的執行器實作
-│   ├── store/       # 執行紀錄儲存 (SQLite / Memory)
-│   └── testcase/    # TestCase 資料模型
-└── main.go          # CLI 與 Server 啟動入口
+│   ├── api/                  # HTTP API and embedded Web UI
+│   ├── catalog/              # Test case discovery and folder/category handling
+│   ├── consoleapp/           # Local console server app wiring
+│   ├── executor/             # Executor implementations
+│   ├── runner/               # Step orchestration, assertions, exports, context injection
+│   ├── store/                # Run storage
+│   └── testcase/             # Test case models
+├── proto/                    # Local proto files used by fake/test services
+├── testcases/                # JSON test cases and group files
+├── main.go                   # CLI entrypoint
+└── Makefile
 ```
 
----
+## Documentation
 
-## 📐 核心設計原則
+Primary specs live under `docs/design/`.
 
-1. **資料驅動 (Data-Driven)**：新增測試劇本只需要撰寫 JSON，不需要修改任何 Go 程式碼。
-2. **無縫整合 (Zero-Config GUI)**：Web UI 與後端引擎在同一個 Binary 中，不依賴龐大的前端建置工具鏈。
-3. **黑盒與白盒的完美結合 (Blackbox + Whitebox)**：透過 gRPC/HTTP/WS 驗證外部結果，結合 `db_check` 深入驗證內部資料狀態。
+Start with:
+
+- `docs/design/01_catalog_spec.md`
+- `docs/design/03_websocket_executor_spec.md`
+- `docs/design/06_web_ui_spec.md`
+- `ai/instructions.md`
+- `ai/memory-bank/02_system_design.md`

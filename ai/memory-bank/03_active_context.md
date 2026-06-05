@@ -1,26 +1,59 @@
 # Active Context
 
-## 當前唯一目標
+## Current Objective
 
-所有核心 Spec 已徹底實作完畢，包含 Web UI 的深色毛玻璃介面重構、gRPC 動態反射、DB Check 動態指標映射、以及 WebSocket 的背景佇列機制。接下來準備依據新架構，撰寫真實的端對端 (E2E) Testcases 進行全面驗證，或擴展進階功能。
+Keep OctoAssert docs, specs, and AI memory synchronized with the current Web UI and executor behavior.
 
-## 已完成
+The current product shape is a local Web UI for catalog-driven, JSON-backed API test cases. The most active area is WebSocket test case authoring and debugging.
 
-- **`docs/design/01_runner_spec.md`**: 已重構為「測試劇本 (JSON Schema) 總覽字典」，提供所有 Step Type 的完整 JSON 範例。
-- **`docs/design/02_testcase_schema_spec.md`**: 定義高階 TestCase 結構與 Assert/Export 語法。 (近期將 `name` 轉換為 `step_id` 對齊結構)
-- **`docs/design/03_grpc_unary_executor_spec.md`**: gRPC Unary 執行器，支援動態 Reflection，無需預先編譯 `.proto`，已改用 `endpoint` 直連。
-- **`docs/design/04_websocket_executor_spec.md`**: WebSocket 執行器，支援內建背景 goroutine 與記憶體佇列，完美支援 `connect`、`send`、`await` (先進先出配對截斷) 與 `close`。
-- **`docs/design/05_db_check_executor_spec.md`**: 內部資料庫驗證，支援原生 `postgres` 與 `mysql` 雙引擎，具備強大的動態指標映射 (Dynamic Row Mapping) 功能。
-- **`docs/design/06_http_executor.md`**: HTTP 執行器，支援完整的 RESTful API 呼叫。
-- **`docs/design/07_web_ui_spec.md`**: 旗艦級 Web UI，支援並排橫向收縮 (Horizontal Collapse) 版面與 600px 高度動態 JSON 預覽。
-- **架構重構與 Fake Server 整合**: 專案重命名為 `octoassert`，CLI 入口位於根目錄 `main.go`。
-- **引擎與介面同步**: 將 Executor 回傳的 JSON 欄位與 Test Case 結構同步 (統一為 `step_id` 與開放 `description`)。
+## Current Stable Behavior
 
-- **實作 Lobby WebSocket 訂閱流程**: 使用 `http_request` 取得 Token 後，建立 WebSocket `connect`，送出 Baccarat Room `subscribe` 請求並驗證。
-- **Run Store 的持久化**: 將目前的 In-Memory Store 升級為 SQLite 持久化儲存。
-- **Include 執行器強化**: 支援防呆機制的「循環 include 偵測」。
-- **全域 Config 管理**: 實作統一的設定檔機制，取代目前個別 Step 手動傳入 `dsn` 或 `endpoint` 的做法。
+- Test cases live under `testcases/`; catalog/category comes from folder path.
+- Test Runner and Test Case Builder both display compatible step result shapes.
+- Builder uses auto-increment string `step_id` values (`"1"`, `"2"`, ...); human meaning belongs in `description`.
+- Builder supports step drag reorder, run step, run all, save confirmation, toast notifications, and JSON validation.
+- WebSocket uses a single `websocket` step with ordered `operations`.
+- WebSocket operation types are `send`, `await`, and `collect`.
+- WebSocket operations support `disabled: true`; UI exposes this as a `Run` checkbox.
+- Builder accepts `${ctx.xxx}` context placeholders, including unquoted placeholders in JSON editors for convenience.
+- Runner preserves placeholder value types when the placeholder is the whole JSON value.
+- WebSocket send payloads are normalized so `Type` / `type` is the first JSON key before write.
+- WebSocket executor records per-operation runtime logs in `StepResult.raw_payload.operation_logs`.
+- Operation Log UI uses tabs per operation and displays actual payload/timing/matched/collected details.
+- Matched and collected messages should display raw message strings when available to preserve field order.
 
-## 參考規格書
+## Recent Work To Preserve
 
-- `docs/design/` 下所有 Markdown 規格書均為最新且與程式碼 100% 同步的真實狀態。
+- Added typed context injection safeguards for `${ctx.roomid}` and compatibility for old `${ctx.ctx.roomid}` values.
+- Added WebSocket operation runtime log fields:
+  - `payload_raw`
+  - `sent_at`
+  - `matched_message_raw`
+  - `collected_messages_raw`
+  - `elapsed_ms`
+- Added Operation Log dialog with operation tabs.
+- Added operation disable support in UI and executor.
+- Added tests for context injection and WebSocket payload ordering.
+
+## Important Design Notes
+
+- Do not reintroduce older WebSocket step types such as `websocket_connect`, `websocket_send`, or `websocket_close`; current design is one `websocket` step with operations.
+- Do not display received WebSocket messages only through parsed/re-stringified JSON when protocol/debug order matters; prefer raw fields.
+- Do not generate `${ctx.ctx.xxx}` in UI autocomplete.
+- Do not silently fallback invalid JSON payloads to `{}`; validation should tell the user, except for supported unquoted context placeholders.
+- Do not hide successful empty WebSocket responses in Builder; result display should remain consistent with Test Runner.
+
+## Reference Specs
+
+- `README.md`
+- `docs/design/01_catalog_spec.md`
+- `docs/design/03_websocket_executor_spec.md`
+- `docs/design/06_web_ui_spec.md`
+- `ai/instructions.md`
+- `ai/memory-bank/02_system_design.md`
+
+## Next Useful Follow-Ups
+
+- Add browser-level UI smoke tests for Builder WebSocket operation logs.
+- Consider surfacing operation runtime logs in Test Runner, not only Builder.
+- Continue keeping docs in sync whenever executor schema or UI behavior changes.

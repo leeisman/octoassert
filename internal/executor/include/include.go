@@ -33,11 +33,11 @@ func (e *Executor) Type() string {
 func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext, step testcase.Step) runner.StepResult {
 	started := time.Now()
 	res := runner.StepResult{
-		StepID:   step.StepID,
+		StepID:      step.StepID,
 		Description: step.Description,
-		Type:      step.Type,
-		StartedAt: started,
-		Status:    runner.StatusPassed,
+		Type:        step.Type,
+		StartedAt:   started,
+		Status:      runner.StatusPassed,
 	}
 
 	action, err := runner.DecodeAction[Action](step)
@@ -93,14 +93,23 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 	// Execute the sub test case, passing the same execution context
 	// This allows the sub test case to access existing variables and write new ones back
 	// effectively inheriting and merging context variables as defined in the spec.
-	subResult := subRunner.RunWithContext(ctx, runCtx, subTC)
+	subResult := subRunner.RunWithContext(ctx, runCtx, subTC, nil)
 
 	if subResult.Status != runner.StatusPassed {
 		res.Status = runner.StatusFailed
 		res.Error = "sub test case failed"
 	}
 
-	// Add sub-steps into this step's output if needed, or just return the summary
+	// Bubble up exported context values from sub-steps.
+	for _, step := range subResult.Steps {
+		for k, v := range step.Values {
+			if res.Values == nil {
+				res.Values = make(map[string]any)
+			}
+			res.Values[k] = v
+		}
+	}
+
 	res.ResponseSummary = "include executed successfully"
 	res.FinishedAt = time.Now()
 	res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()

@@ -1,82 +1,234 @@
 # Web UI Spec
 
-Web UI 是唯一主要操作介面，負責瀏覽 test case、執行測試與觀察結果。
+The Web UI is the primary OctoAssert interface. It manages the catalog, edits test cases, runs steps or full test cases, and inspects runtime results.
 
----
+Frontend files are embedded in the Go binary from `internal/api/web/`.
 
-## Layout
+## Top-Level Views
 
-第一版已進化為旗艦級介面，採用深色模式（Dark Mode）、毛玻璃特效（Glassmorphism）與極簡設計：
+The UI has two main tabs:
 
-1. **左側 Catalog Tree (Catalog Explorer)**
-   - 樹狀顯示所有 Test Cases (`testcases/*`)，支援多層級資料夾。
-   - 支援快速點擊展開/收合。
-   - 右鍵選單支援 Run, Edit (進入 Builder), Duplicate, Delete, Select 等操作。
-   - 頂部支援搜尋過濾。
-
-2. **中間/右側 Test Case Builder & Runner Orchestrator**
-   - **Test Case 資訊**: 顯示 ID, Name, Description, 設定 Timeout。
-   - **Step 編輯/預覽區域**:
-     - **左右分欄佈局 (Side-by-side Layout)**:
-       - 左側：**Step Data** (參數、設定、Asserts、Exports)，可點擊收合按鈕 (Horizontal Collapse) 變為極窄側邊欄。
-       - 右側：**Step Response** (執行結果的 JSON)，最高可達 `600px` 顯示超大 JSON，當左側收合時，右側自動展開佔據接近 100% 寬度。
-   - 視覺反饋明確：失敗標紅、成功標綠、載入中動畫。
-
----
-
-## Test Case Tree
-
-由 `testcases/` 目錄結構推導，不依賴 JSON 欄位。
-
-```text
-testcases/
-  baccarat/
-    place_bet.json
-  queryserver/
-    fetch_rooms.json
-```
-
-UI 呈現：
-
-```text
-baccarat
-  Place Bet
-queryserver
-  Fetch Rooms
-```
-
----
-
-## Response Console
-
-每次執行後顯示：
-
-| 欄位 | 說明 |
+| Tab | Purpose |
 | --- | --- |
-| run status | passed / failed |
-| test case id | 執行的 test case |
-| elapsed time | 總耗時 |
-| step list | 每個 step 的狀態、type、耗時、ResponseSummary、error |
+| Test Runner | Browse catalog, inspect saved JSON, execute a saved test case. |
+| Test Case Builder | Create or edit a test case with structured controls. |
 
----
+Switching to Test Case Builder normally starts a fresh draft. Editing from Test Runner loads the selected test case into Builder.
+
+## Catalog
+
+Catalog is derived from folders under `testcases/`.
+
+Capabilities:
+
+- nested folders as categories
+- root-level test cases
+- expand/collapse folders
+- expand all / collapse all
+- duplicate test case
+- delete test case
+- delete folder
+- multi-select mode for bulk move/delete
+- drag sorting for folders/test cases where supported
+- edit selected case in Builder
+
+The displayed category should match the filesystem path relative to `testcases/`.
+
+## Test Runner
+
+Runner displays:
+
+- selected test case title
+- editable saved test case JSON
+- execution steps
+- selected step request
+- selected step result
+
+The Test Case JSON panel supports direct editing. Save is allowed only when the content is valid JSON and contains a valid test case object.
+
+`Execute Run` calls `/api/run` and streams progress with NDJSON when supported:
+
+```http
+Accept: application/x-ndjson
+```
+
+The runner marks steps as `pending`, `running`, `passed`, or `failed`, then renders the final `RunResult`.
+
+## Test Case Builder
+
+Builder supports structured editing for all executor types.
+
+General behavior:
+
+- `step_id` is auto-numbered as `"1"`, `"2"`, `"3"`, etc.
+- `description` holds the human-readable meaning.
+- Steps can be reordered by drag/drop.
+- Individual steps can be run with `Run Step`.
+- All steps can be run with `Run All`.
+- Save shows a confirmation dialog with final JSON.
+- Save success/failure and run success/failure use toast notifications.
+- JSON editors validate before save/run.
+- Context suggestions appear when typing `$` in supported inputs.
+
+Catalog/category field:
+
+- UI label is `Catalog`.
+- The value maps to filesystem category under `testcases/`.
+- Existing categories can be picked from a dropdown.
+
+## Context Suggestions
+
+Context values come from step exports and are stored in the browser for builder convenience.
+
+When typing `$`, the UI suggests available keys and inserts:
+
+```text
+${ctx.name}
+```
+
+If a key is already stored as `ctx.name`, autocomplete still inserts `${ctx.name}` and must not produce `${ctx.ctx.name}`.
+
+JSON editors accept both:
+
+```json
+{ "Room": "${ctx.roomid}" }
+```
+
+and convenience form:
+
+```json
+{ "Room": ${ctx.roomid} }
+```
+
+The latter is normalized before save/run.
+
+## WebSocket Operation Editor
+
+For `websocket` steps, Builder shows an operations list.
+
+Operation controls:
+
+- add `send`
+- add `await`
+- add `collect`
+- reorder operations
+- delete operations
+- `Run` checkbox to temporarily disable an operation
+
+Unchecking `Run` writes:
+
+```json
+{ "disabled": true }
+```
+
+Disabled operations are skipped by both Builder runs and Test Runner execution.
+
+Payload editor:
+
+- uses a plain syntax-highlighted JSON input
+- does not show inline tree/collapse controls
+- accepts context placeholders
+- prevents invalid JSON unless the invalid part is a supported unquoted context placeholder
+
+## Step Response
+
+Builder Step Response should use the same data shape as Test Runner Step Result:
+
+```json
+{
+  "step_id": "2",
+  "type": "websocket",
+  "status": "passed",
+  "elapsed_ms": 10,
+  "response_summary": [],
+  "values": {}
+}
+```
+
+Step Response header may include:
+
+| Button | Visibility | Purpose |
+| --- | --- | --- |
+| Operation Log | WebSocket results with operation logs | Inspect per-operation payloads, status, and timing. |
+| Open JSON Tree | Any step result | Open collapsible JSON tree / raw viewer for the response. |
+
+## Operation Log Dialog
+
+Operation Log uses tabs:
+
+- one tab per operation
+- detail panel for selected operation
+- summary rows for operation, status, id, timing, timeout, collected count, and errors
+- raw payload display
+- match display
+- matched message display
+- collected messages display
+- full operation log JSON
+
+Payload display must prefer `payload_raw` to preserve the actual send order.
+
+Matched and collected message display must prefer:
+
+- `matched_message_raw`
+- `collected_messages_raw`
+
+This avoids changing field order by parsing and re-stringifying received messages.
+
+## JSON Tree Dialog
+
+The JSON tree dialog is for readability, not for preserving raw field order.
+
+Features:
+
+- tree/raw toggle
+- expand all / collapse all
+- zoom in / zoom out
+- Esc or backdrop click closes the dialog
+
+## File Picker
+
+Proto file inputs support selecting readable external files through the UI. Prefer relative paths when test cases need to run on other machines.
+
+## Toasts And Dialogs
+
+Use toast notifications for transient success/failure messages:
+
+- save completed
+- run completed
+- run failed
+- validation failed
+
+Use dialogs when the user must confirm a destructive or important action:
+
+- delete
+- save final JSON confirmation
+- invalid JSON in saved Test Runner JSON
 
 ## API Contract
 
+Key endpoints:
+
+```text
+GET    /api/testcases
+GET    /api/testcases/{id}
+DELETE /api/testcases/{id}
+POST   /api/testcases/{id}/duplicate
+POST   /api/testcases/bulk-delete
+POST   /api/testcases/bulk-move
+POST   /api/testcases/reorder
+GET    /api/explore/categories
+POST   /api/run
+POST   /api/builder/run-step
+POST   /api/builder/run
+POST   /api/builder/save
 ```
-GET    /api/testcases          列出所有 test case 摘要
-GET    /api/testcases/{id}     取得指定 test case 完整內容
-POST   /api/testcases          建立或覆寫 test case
-DELETE /api/testcases/{id}     刪除 test case
-POST   /api/testcases/{id}/duplicate 複製 test case
-POST   /api/run                執行指定 test case（body: {"id": "test_001"}）
-```
 
-執行 timeout 以 test case 的 `config.timeout_ms` 為準，未設定時預設 30 秒。
+Execution timeout follows `test_case.config.timeout_ms`, defaulting to 30 seconds when unset.
 
----
+## Design Principles
 
-## 設計原則
-
-- 前端只負責呈現與觸發，不執行任何測試邏輯
-- Runner / executor 行為由後端負責
-- test case 分類以資料夾為主，不依賴 UI 手動配置
+- The frontend never implements executor behavior.
+- Runner/executor results are the source of truth.
+- Builder and Runner should display compatible step result shapes.
+- Catalog category should reflect filesystem location.
+- Raw runtime payloads/messages should be preserved when debugging protocol order matters.

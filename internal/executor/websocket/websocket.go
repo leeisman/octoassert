@@ -1,10 +1,12 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,43 +17,83 @@ import (
 	"octoassert/pkg/jsonpath"
 )
 
-// --- Global Connection Pool ---
+// --- Action Models ---
+type WSAction struct {
+	URL        string            `json:"url"`
+	Headers    map[string]string `json:"headers"`
+	Operations []WSOperation     `json:"operations"`
+}
+
+type WSOperation struct {
+	ID          string            `json:"id,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Disabled    bool              `json:"disabled,omitempty"`
+	Type        string            `json:"type"`              // "send" or "await"
+	Payload     json.RawMessage   `json:"payload,omitempty"` // for send
+	Match       AwaitMatch        `json:"match,omitempty"`   // for await
+	TimeoutMs   int               `json:"timeout_ms,omitempty"`
+	Exports     []testcase.Export `json:"exports,omitempty"`
+}
+
+type WSOperationLog struct {
+	Index                  int               `json:"index"`
+	ID                     string            `json:"id,omitempty"`
+	Type                   string            `json:"type"`
+	Description            string            `json:"description,omitempty"`
+	Disabled               bool              `json:"disabled,omitempty"`
+	Status                 string            `json:"status"`
+	StartedAt              time.Time         `json:"started_at,omitempty"`
+	FinishedAt             time.Time         `json:"finished_at,omitempty"`
+	ElapsedMS              int64             `json:"elapsed_ms,omitempty"`
+	SentAt                 time.Time         `json:"sent_at,omitempty"`
+	Payload                any               `json:"payload,omitempty"`
+	PayloadRaw             string            `json:"payload_raw,omitempty"`
+	Match                  *AwaitMatch       `json:"match,omitempty"`
+	TimeoutMs              int               `json:"timeout_ms,omitempty"`
+	MatchedMessage         any               `json:"matched_message,omitempty"`
+	MatchedMessageRaw      string            `json:"matched_message_raw,omitempty"`
+	CollectedMessages      []any             `json:"collected_messages,omitempty"`
+	CollectedMessagesRaw   []string          `json:"collected_messages_raw,omitempty"`
+	CollectedMessagesCount int               `json:"collected_messages_count,omitempty"`
+	Error                  string            `json:"error,omitempty"`
+	Exports                []testcase.Export `json:"exports,omitempty"`
+}
+
+// AwaitMatch describes how to match an incoming WebSocket message.
+// Exactly one of Equals / Any / Contains should be set.
+type AwaitMatch struct {
+	Path     string `json:"path"`               // gjson path to extract from the message
+	Equals   any    `json:"equals,omitempty"`   // exact value match
+	Any      bool   `json:"any,omitempty"`      // match as long as path exists
+	Contains string `json:"contains,omitempty"` // path value contains this substring
+}
+
+// matchMessage returns true when msg satisfies the AwaitMatch criteria.
+// If Path is empty, any message matches (useful for "wait for next message" without filtering).
+func matchMessage(msg string, m AwaitMatch) bool {
+	if m.Path == "" {
+		return true
+	}
+	if m.Any {
+		_, err := jsonpath.Extract(msg, m.Path)
+		return err == nil
+	}
+	if m.Contains != "" {
+		val, err := jsonpath.Extract(msg, m.Path)
+		if err != nil {
+			return false
+		}
+		return strings.Contains(fmt.Sprint(val), m.Contains)
+	}
+	ok, _ := jsonpath.Assert(msg, m.Path, m.Equals)
+	return ok
+}
+
 type WSContext struct {
 	conn     *websocket.Conn
 	msgQueue []string
 	mu       sync.Mutex
 	cancel   context.CancelFunc
-}
-
-var (
-	poolMu   sync.RWMutex
-	connPool = make(map[string]*WSContext)
-)
-
-// --- Action Models ---
-type ConnectAction struct {
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers"`
-}
-
-type SendAction struct {
-	ConnID  string          `json:"conn_id"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-type AwaitMatch struct {
-	Path   string `json:"path"`
-	Equals any    `json:"equals"`
-}
-
-type AwaitAction struct {
-	ConnID    string     `json:"conn_id"`
-	Match     AwaitMatch `json:"match"`
-	TimeoutMs int        `json:"timeout_ms"`
-}
-
-type CloseAction struct {
-	ConnID string `json:"conn_id"`
 }
 
 // --- Executor ---
@@ -67,45 +109,27 @@ func (e *Executor) Type() string {
 	return e.stepType
 }
 
-func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step testcase.Step) runner.StepResult {
+func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext, step testcase.Step) runner.StepResult {
 	started := time.Now()
 	res := runner.StepResult{
-		StepID:   step.StepID,
+		StepID:      step.StepID,
 		Description: step.Description,
-		Type:      step.Type,
-		StartedAt: started,
-		Status:    runner.StatusPassed,
+		Type:        step.Type,
+		StartedAt:   started,
+		Status:      runner.StatusPassed,
 	}
 
-	var err error
-
-	switch e.stepType {
-	case "websocket_connect":
-		err = e.executeConnect(ctx, step, &res)
-	case "websocket_send":
-		err = e.executeSend(step, &res)
-	case "websocket_await":
-		err = e.executeAwait(step, &res)
-	case "websocket_close":
-		err = e.executeClose(step, &res)
-	default:
-		err = fmt.Errorf("unknown websocket step type: %s", e.stepType)
+	if e.stepType != "websocket" {
+		res.Status = runner.StatusFailed
+		res.Error = fmt.Sprintf("unsupported websocket step type: %s", e.stepType)
+		return res
 	}
 
+	action, err := runner.DecodeAction[WSAction](step)
 	if err != nil {
 		res.Status = runner.StatusFailed
 		res.Error = err.Error()
-	}
-
-	res.FinishedAt = time.Now()
-	res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()
-	return res
-}
-
-func (e *Executor) executeConnect(ctx context.Context, step testcase.Step, res *runner.StepResult) error {
-	action, err := runner.DecodeAction[ConnectAction](step)
-	if err != nil {
-		return err
+		return res
 	}
 
 	headers := http.Header{}
@@ -115,21 +139,19 @@ func (e *Executor) executeConnect(ctx context.Context, step testcase.Step, res *
 
 	conn, _, err := websocket.DefaultDialer.Dial(action.URL, headers)
 	if err != nil {
-		return fmt.Errorf("dial failed: %w", err)
+		res.Status = runner.StatusFailed
+		res.Error = fmt.Sprintf("dial failed: %v", err)
+		return res
 	}
+	defer conn.Close() // GUARANTEED CLEANUP!
 
-	// Generate a unique conn_id
-	connID := fmt.Sprintf("ws-%d", time.Now().UnixNano())
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	readCtx, cancel := context.WithCancel(context.Background())
 	wsc := &WSContext{
 		conn:   conn,
 		cancel: cancel,
 	}
-
-	poolMu.Lock()
-	connPool[connID] = wsc
-	poolMu.Unlock()
 
 	// Start background reader
 	go func() {
@@ -140,7 +162,6 @@ func (e *Executor) executeConnect(ctx context.Context, step testcase.Step, res *
 			default:
 				_, msg, err := conn.ReadMessage()
 				if err != nil {
-					// Connection closed or error
 					return
 				}
 				wsc.mu.Lock()
@@ -150,109 +171,302 @@ func (e *Executor) executeConnect(ctx context.Context, step testcase.Step, res *
 		}
 	}()
 
-	// Inject conn_id into response summary so Runner's Export can extract it
-	res.ResponseSummary = fmt.Sprintf(`{"conn_id":"%s"}`, connID)
-	return nil
-}
-
-func (e *Executor) executeSend(step testcase.Step, res *runner.StepResult) error {
-	action, err := runner.DecodeAction[SendAction](step)
-	if err != nil {
-		return err
-	}
-	res.RawPayload = action.Payload
-
-	poolMu.RLock()
-	wsc, ok := connPool[action.ConnID]
-	poolMu.RUnlock()
-
-	if !ok {
-		return fmt.Errorf("connection not found: %s", action.ConnID)
-	}
-
-	err = wsc.conn.WriteMessage(websocket.TextMessage, action.Payload)
-	if err != nil {
-		return fmt.Errorf("write message failed: %w", err)
-	}
-	res.ResponseSummary = `{"status":"sent"}`
-	return nil
-}
-
-func (e *Executor) executeAwait(step testcase.Step, res *runner.StepResult) error {
-	action, err := runner.DecodeAction[AwaitAction](step)
-	if err != nil {
-		return err
-	}
-
-	poolMu.RLock()
-	wsc, ok := connPool[action.ConnID]
-	poolMu.RUnlock()
-
-	if !ok {
-		return fmt.Errorf("connection not found: %s", action.ConnID)
-	}
-
-	timeout := time.Duration(action.TimeoutMs) * time.Millisecond
-	if timeout == 0 {
-		timeout = 5 * time.Second // default timeout
-	}
-
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for message matching path '%s'", action.Match.Path)
+	var allMessages []string
+	var opLogs []WSOperationLog
+	attachOperationLogs := func() {
+		if len(opLogs) == 0 {
+			return
 		}
+		raw, err := json.Marshal(map[string]any{"operation_logs": opLogs})
+		if err == nil {
+			res.RawPayload = raw
+		}
+	}
 
-		<-ticker.C
-
-		wsc.mu.Lock()
-		matchIdx := -1
-		var matchedMsg string
-
-		// Scan from oldest to newest
-		for i, msg := range wsc.msgQueue {
-			ok, _ := jsonpath.Assert(msg, action.Match.Path, action.Match.Equals)
-			if ok {
-				matchIdx = i
-				matchedMsg = msg
-				break
+	// Process Operations sequentially
+	for i, op := range action.Operations {
+		opLog := WSOperationLog{
+			Index:       i + 1,
+			ID:          op.ID,
+			Type:        op.Type,
+			Description: op.Description,
+			Disabled:    op.Disabled,
+			StartedAt:   time.Now(),
+			Match:       matchPtr(op.Match),
+			TimeoutMs:   op.TimeoutMs,
+			Exports:     op.Exports,
+		}
+		if op.Disabled {
+			opLog.Status = "skipped"
+			opLog.FinishedAt = time.Now()
+			opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+			opLogs = append(opLogs, opLog)
+			continue
+		}
+		switch op.Type {
+		case "send":
+			// Inject context mid-flight into payload
+			payloadBytes := runner.InjectContext(op.Payload, runCtx)
+			payloadBytes = orderJSONTypeFirst(payloadBytes)
+			opLog.PayloadRaw = string(payloadBytes)
+			opLog.Payload = parseJSONForLog(payloadBytes)
+			if err := conn.WriteMessage(websocket.TextMessage, payloadBytes); err != nil {
+				res.Status = runner.StatusFailed
+				res.Error = fmt.Sprintf("op %d send failed: %v", i, err)
+				opLog.Status = "failed"
+				opLog.Error = res.Error
+				opLog.FinishedAt = time.Now()
+				opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+				opLogs = append(opLogs, opLog)
+				attachOperationLogs()
+				return res
 			}
-		}
+			opLog.Status = "sent"
+			opLog.SentAt = time.Now()
+			opLog.FinishedAt = opLog.SentAt
+			opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+			opLogs = append(opLogs, opLog)
 
-		if matchIdx != -1 {
-			// Found it! Discard this message and all older messages
-			wsc.msgQueue = wsc.msgQueue[matchIdx+1:]
+		case "await":
+			timeout := time.Duration(op.TimeoutMs) * time.Millisecond
+			if timeout == 0 {
+				timeout = 5 * time.Second
+			}
+			waitCtx, waitCancel := context.WithTimeout(ctx, timeout)
+
+			matchFound := false
+			matchIdx := -1
+
+		awaitLoop:
+			for {
+				select {
+				case <-waitCtx.Done():
+					waitCancel()
+					res.Status = runner.StatusFailed
+					res.Error = fmt.Sprintf("op %d await timeout", i)
+					opLog.Status = "failed"
+					opLog.Error = res.Error
+					opLog.FinishedAt = time.Now()
+					opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+					opLogs = append(opLogs, opLog)
+					attachOperationLogs()
+					return res
+				case <-time.After(50 * time.Millisecond):
+					wsc.mu.Lock()
+					for idx, msg := range wsc.msgQueue {
+						if matchMessage(msg, op.Match) {
+							matchFound = true
+							matchIdx = idx
+							break
+						}
+					}
+					wsc.mu.Unlock()
+
+					if matchFound {
+						break awaitLoop
+					}
+				}
+			}
+			waitCancel()
+
+			wsc.mu.Lock()
+			collectedMsgs := wsc.msgQueue[:matchIdx+1]
+			wsc.msgQueue = wsc.msgQueue[matchIdx+1:] // consume matched messages
 			wsc.mu.Unlock()
-			
-			res.ResponseSummary = matchedMsg
-			return nil
+
+			allMessages = append(allMessages, collectedMsgs...)
+			opLog.Status = "matched"
+			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
+			opLog.CollectedMessagesRaw = collectedMsgs
+			opLog.CollectedMessagesCount = len(collectedMsgs)
+			if len(collectedMsgs) > 0 {
+				matchedRaw := collectedMsgs[len(collectedMsgs)-1]
+				opLog.MatchedMessageRaw = matchedRaw
+				opLog.MatchedMessage = parseJSONForLog([]byte(matchedRaw))
+			}
+
+			// Process intermediate exports — extract from the MATCHED message directly.
+			// The matched message is always the last element of collectedMsgs.
+			if len(op.Exports) > 0 && len(collectedMsgs) > 0 {
+				matchedMsg := collectedMsgs[len(collectedMsgs)-1]
+				for _, exp := range op.Exports {
+					val, err := jsonpath.Extract(matchedMsg, exp.Path)
+					if err == nil {
+						runCtx.Set(exp.As, val)
+						if res.Values == nil {
+							res.Values = make(map[string]any)
+						}
+						res.Values[exp.As] = val
+					}
+				}
+			}
+			opLog.FinishedAt = time.Now()
+			opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+			opLogs = append(opLogs, opLog)
+		case "collect":
+			// Wait the full timeout then collect every message received in that window.
+			timeout := time.Duration(op.TimeoutMs) * time.Millisecond
+			if timeout == 0 {
+				timeout = 3 * time.Second
+			}
+			collectCtx, collectCancel := context.WithTimeout(ctx, timeout)
+			<-collectCtx.Done()
+			collectCancel()
+
+			wsc.mu.Lock()
+			collectedMsgs := make([]string, len(wsc.msgQueue))
+			copy(collectedMsgs, wsc.msgQueue)
+			wsc.msgQueue = nil
+			wsc.mu.Unlock()
+
+			allMessages = append(allMessages, collectedMsgs...)
+			opLog.Status = "collected"
+			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
+			opLog.CollectedMessagesRaw = collectedMsgs
+			opLog.CollectedMessagesCount = len(collectedMsgs)
+
+			// Per-operation exports (extract from the array of all collected messages)
+			if len(op.Exports) > 0 && len(collectedMsgs) > 0 {
+				rawMsgs := make([]json.RawMessage, len(collectedMsgs))
+				for mi, m := range collectedMsgs {
+					rawMsgs[mi] = json.RawMessage(m)
+				}
+				collectedBytes, _ := json.Marshal(rawMsgs)
+				collectedStr := string(collectedBytes)
+				for _, exp := range op.Exports {
+					val, err := jsonpath.Extract(collectedStr, exp.Path)
+					if err == nil {
+						runCtx.Set(exp.As, val)
+						if res.Values == nil {
+							res.Values = make(map[string]any)
+						}
+						res.Values[exp.As] = val
+					}
+				}
+			}
+			opLog.FinishedAt = time.Now()
+			opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+			opLogs = append(opLogs, opLog)
+
+		default:
+			res.Status = runner.StatusFailed
+			res.Error = fmt.Sprintf("unknown operation type: %s", op.Type)
+			opLog.Status = "failed"
+			opLog.Error = res.Error
+			opLog.FinishedAt = time.Now()
+			opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+			opLogs = append(opLogs, opLog)
+			attachOperationLogs()
+			return res
 		}
-		wsc.mu.Unlock()
 	}
+
+	// Final summary contains ALL messages received across all awaits
+	if len(allMessages) > 0 {
+		// Each message is already a JSON string; wrap as RawMessage so the
+		// output is an array of objects instead of an array of escaped strings.
+		raws := make([]json.RawMessage, 0, len(allMessages))
+		for _, msg := range allMessages {
+			raws = append(raws, json.RawMessage(msg))
+		}
+		out, _ := json.Marshal(raws)
+		res.ResponseSummary = string(out)
+	}
+
+	res.FinishedAt = time.Now()
+	res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()
+	attachOperationLogs()
+	return res
 }
 
-func (e *Executor) executeClose(step testcase.Step, res *runner.StepResult) error {
-	action, err := runner.DecodeAction[CloseAction](step)
+func matchPtr(match AwaitMatch) *AwaitMatch {
+	if match.Path == "" && match.Equals == nil && !match.Any && match.Contains == "" {
+		return nil
+	}
+	return &match
+}
+
+func parseJSONForLog(raw []byte) any {
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err == nil {
+		return parsed
+	}
+	return string(raw)
+}
+
+func orderJSONTypeFirst(raw []byte) []byte {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
 	if err != nil {
-		return err
+		return raw
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return raw
 	}
 
-	poolMu.Lock()
-	wsc, ok := connPool[action.ConnID]
-	if ok {
-		delete(connPool, action.ConnID)
+	type field struct {
+		key   string
+		value json.RawMessage
 	}
-	poolMu.Unlock()
-
-	if !ok {
-		return fmt.Errorf("connection not found: %s", action.ConnID)
+	var fields []field
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return raw
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return raw
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return raw
+		}
+		fields = append(fields, field{key: key, value: value})
+	}
+	if _, err := dec.Token(); err != nil {
+		return raw
 	}
 
-	wsc.cancel() // Stop reader goroutine
-	wsc.conn.Close()
-	res.ResponseSummary = `{"status":"closed"}`
-	return nil
+	typeIdx := -1
+	for i, f := range fields {
+		if f.key == "Type" || f.key == "type" {
+			typeIdx = i
+			break
+		}
+	}
+	if typeIdx <= 0 {
+		return raw
+	}
+
+	ordered := make([]field, 0, len(fields))
+	ordered = append(ordered, fields[typeIdx])
+	ordered = append(ordered, fields[:typeIdx]...)
+	ordered = append(ordered, fields[typeIdx+1:]...)
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, f := range ordered {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		keyBytes, err := json.Marshal(f.key)
+		if err != nil {
+			return raw
+		}
+		buf.Write(keyBytes)
+		buf.WriteByte(':')
+		buf.Write(f.value)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
+}
+
+func rawMessagesForLog(messages []string) []any {
+	raw := make([]any, 0, len(messages))
+	for _, msg := range messages {
+		raw = append(raw, parseJSONForLog([]byte(msg)))
+	}
+	return raw
 }
