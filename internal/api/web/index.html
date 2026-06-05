@@ -57,11 +57,17 @@
       <h2 class="panel-title sidebar-title">
         <span class="sidebar-title-text">Catalog</span>
         <div class="catalog-title-actions">
+          <button id="catalog-expand-all-btn" class="icon-btn" type="button" aria-label="Expand all folders" title="Expand all folders">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="7 8 12 13 17 8"/><polyline points="7 14 12 19 17 14"/></svg>
+          </button>
+          <button id="catalog-collapse-all-btn" class="icon-btn" type="button" aria-label="Collapse all folders" title="Collapse all folders">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="7 10 12 5 17 10"/><polyline points="7 16 12 11 17 16"/></svg>
+          </button>
           <button id="catalog-select-btn" class="icon-btn" type="button" aria-label="Select test cases" title="Select test cases">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           </button>
         </div>
-        <button id="catalog-toggle" class="icon-btn" type="button" aria-label="Collapse catalog" title="Collapse catalog">
+        <button id="catalog-toggle" class="icon-btn" type="button" aria-label="Collapse catalog sidebar" title="Collapse catalog sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
       </h2>
@@ -107,12 +113,18 @@
           <div class="json-viewer glass-inner testcase-viewer" id="testcase-viewer">
             <h3 class="inner-title testcase-viewer-title">
               Test Case JSON
-              <button id="testcase-toggle" class="icon-btn" type="button" title="Collapse">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="18 15 12 9 6 15"></polyline></svg>
-              </button>
+              <span class="testcase-json-actions">
+                <button id="testcase-json-save" class="btn btn-accent btn-sm" type="button" style="display:none">Save JSON</button>
+                <button id="testcase-toggle" class="icon-btn" type="button" title="Collapse">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                </button>
+              </span>
             </h3>
             <div class="code-container" id="testcase-body">
-              <pre><code id="testcase-json-output">// Selected test case JSON will appear here...</code></pre>
+              <div class="testcase-json-editor-wrap">
+                <pre class="testcase-json-highlight" aria-hidden="true"><code id="testcase-json-highlight"></code></pre>
+                <textarea id="testcase-json-output" class="testcase-json-editor" spellcheck="false" readonly>// Selected test case JSON will appear here...</textarea>
+              </div>
             </div>
           </div>
           <div class="step-data-grid">
@@ -145,9 +157,13 @@
           <input id="tc-name" class="exp-input" placeholder="revive baccarat room" autocomplete="off">
         </div>
         <div>
-          <label class="exp-label">Category</label>
-          <input id="tc-category" class="exp-input" placeholder="baccarat" list="builder-cat-list" autocomplete="off">
-          <datalist id="builder-cat-list"></datalist>
+          <label class="exp-label">Catalog</label>
+          <div class="catalog-picker">
+            <input id="tc-category" class="exp-input" placeholder="baccarat/smoke" autocomplete="off">
+            <button id="builder-cat-picker-btn" class="icon-btn catalog-picker-btn" type="button" title="Choose catalog" aria-label="Choose catalog">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+          </div>
         </div>
         <div>
           <label class="exp-label">Timeout (ms)</label>
@@ -253,8 +269,8 @@
         <div class="oa-modal-msg"   id="oa-modal-msg"></div>
       </div>
       <div class="oa-modal-actions">
-        <button id="oa-modal-cancel"  class="btn">取消</button>
-        <button id="oa-modal-confirm" class="btn oa-btn-danger">確定</button>
+        <button id="oa-modal-cancel"  class="btn">Cancel</button>
+        <button id="oa-modal-confirm" class="btn oa-btn-danger">Confirm</button>
       </div>
     </div>
   </div>

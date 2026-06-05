@@ -2,19 +2,25 @@
   "id": "sample_delay",
   "name": "Sample: Delay",
   "description": "示範 delay executor，可用於等待服務就緒或在步驟之間加入緩衝時間。",
-  "config": { "timeout_ms": 5000 },
+  "config": {
+    "timeout_ms": 5000
+  },
   "steps": [
     {
-      "step_id": "wait_100ms",
+      "step_id": "1",
       "type": "delay",
       "description": "等待 100ms",
-      "action": { "duration_ms": 100 }
+      "action": {
+        "duration_ms": 100
+      }
     },
     {
-      "step_id": "wait_200ms",
+      "step_id": "2",
       "type": "delay",
       "description": "再等 200ms",
-      "action": { "duration_ms": 200 }
+      "action": {
+        "duration_ms": 200
+      }
     }
   ]
 }

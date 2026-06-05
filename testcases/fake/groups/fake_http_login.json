@@ -5,13 +5,16 @@
   "project": "fake",
   "module": "groups",
   "api": "http_login",
-  "tags": ["fake", "group"],
+  "tags": [
+    "fake",
+    "group"
+  ],
   "config": {
     "timeout_ms": 5000
   },
   "steps": [
     {
-      "step_id": "start_fake_http",
+      "step_id": "1",
       "type": "fake_http_start",
       "action": {
         "port": 18083,
@@ -20,36 +23,61 @@
             "method": "POST",
             "path": "/api/login",
             "status": 200,
-            "body": { "token": "fake-token-abc" }
+            "body": {
+              "token": "fake-token-abc"
+            }
           },
           {
             "method": "GET",
             "path": "/health",
             "status": 200,
-            "body": { "authenticated": true }
+            "body": {
+              "authenticated": true
+            }
           }
         ]
       },
       "exports": [
-        { "path": "url", "as": "ctx.fake_http_url" }
-      ]
+        {
+          "path": "url",
+          "as": "ctx.fake_http_url"
+        }
+      ],
+      "description": "start fake http"
     },
     {
-      "step_id": "login",
+      "step_id": "2",
       "type": "http_request",
       "action": {
         "method": "POST",
         "url": "${ctx.fake_http_url}/api/login",
-        "headers": { "Content-Type": "application/json" },
-        "payload": { "user": "test", "pass": "1234" }
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "payload": {
+          "user": "test",
+          "pass": "1234"
+        }
       },
       "asserts": [
-        { "type": "json_path", "path": "status_code", "expect": 200 },
-        { "type": "json_path", "path": "body.token", "expect": "fake-token-abc" }
+        {
+          "type": "json_path",
+          "path": "status_code",
+          "expect": 200
+        },
+        {
+          "type": "json_path",
+          "path": "body.token",
+          "expect": "fake-token-abc"
+        }
       ],
       "exports": [
-        { "path": "body.token", "as": "ctx.token" }
-      ]
+        {
+          "path": "body.token",
+          "as": "ctx.token"
+        }
+      ],
+      "description": "login"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "id": "proxy_create_room",
+  "id": "proxy_createroom",
   "name": "Proxy CreateRoom",
   "description": "Fetch the first registered server id from queryserver, then proxy cbm.ClassicalBaccarat/CreateRoom through queryserver.",
   "config": {
@@ -9,7 +9,7 @@
     {
       "step_id": "1",
       "type": "grpc_unary",
-      "description": "management.DistributeServiceManagement/FetchServerList",
+      "description": "",
       "action": {
         "endpoint": "127.0.0.1:50055",
         "service": "management.DistributeServiceManagement",
@@ -33,23 +33,23 @@
     {
       "step_id": "2",
       "type": "grpc_unary",
-      "description": "cbm.ClassicalBaccarat/CreateRoom via queryserver proxy",
+      "description": "CreateRoom via queryserver proxy",
       "action": {
         "endpoint": "127.0.0.1:50055",
         "service": "cbm.ClassicalBaccarat",
         "method": "CreateRoom",
-        "metadata": {
-          "x-server-id": "${ctx.server_id}"
-        },
-        "proto_files": [
-          "../distributeproto/ClassicalBaccaratManagement.proto"
-        ],
         "payload": {
           "roomName": "octoassert-proxy-room",
           "ruleId": 1,
           "synthesizerId": 1,
           "exposureSize": 100000
-        }
+        },
+        "metadata": {
+          "x-server-id": "${ctx.server_id}"
+        },
+        "proto_files": [
+          "../distributeproto/ClassicalBaccaratManagement.proto"
+        ]
       },
       "asserts": [
         {
@@ -100,7 +100,8 @@
           "path": "rows.0.exposure_size",
           "expect": 100000
         }
-      ]
+      ],
+      "exports": null
     }
   ]
 }

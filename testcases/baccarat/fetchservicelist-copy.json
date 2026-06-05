@@ -7,7 +7,7 @@
   },
   "steps": [
     {
-      "step_id": "step_1",
+      "step_id": "1",
       "type": "fake_grpc_start",
       "description": "",
       "action": {
@@ -25,7 +25,7 @@
       "exports": null
     },
     {
-      "step_id": "step_2",
+      "step_id": "2",
       "type": "fake_http_start",
       "description": "",
       "action": {

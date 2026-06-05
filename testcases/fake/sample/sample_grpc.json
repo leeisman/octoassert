@@ -2,61 +2,102 @@
   "id": "sample_grpc",
   "name": "Sample: gRPC Unary",
   "description": "啟動 fake gRPC server，驗證 grpc_unary executor 的 Echo / GetStatus 行為，並示範 export 取出回傳欄位。",
-  "config": { "timeout_ms": 10000 },
+  "config": {
+    "timeout_ms": 10000
+  },
   "steps": [
     {
-      "step_id": "start_grpc",
+      "step_id": "1",
       "type": "fake_grpc_start",
       "action": {
         "port": 19091,
-        "proto_files": ["proto/fake/service.proto"],
+        "proto_files": [
+          "proto/fake/service.proto"
+        ],
         "responses": {
-          "FakeService/GetStatus": { "status": "running", "code": 0 },
-          "FakeService/Echo":      { "message": "world" }
+          "FakeService/GetStatus": {
+            "status": "running",
+            "code": 0
+          },
+          "FakeService/Echo": {
+            "message": "world"
+          }
         }
       },
       "exports": [
-        { "path": "addr", "as": "ctx.grpc_addr" }
-      ]
+        {
+          "path": "addr",
+          "as": "ctx.grpc_addr"
+        }
+      ],
+      "description": "start grpc"
     },
     {
-      "step_id": "get_status",
+      "step_id": "2",
       "type": "grpc_unary",
       "description": "GetStatus 應回傳 grpc_code OK 與 status running",
       "action": {
         "endpoint": "${ctx.grpc_addr}",
-        "service":  "FakeService",
-        "method":   "GetStatus",
-        "payload":  {}
+        "service": "FakeService",
+        "method": "GetStatus",
+        "payload": {}
       },
       "asserts": [
-        { "type": "json_path", "path": "grpc_code",       "expect": "OK" },
-        { "type": "json_path", "path": "response.status", "expect": "running" },
-        { "type": "json_path", "path": "response.code",   "expect": 0 }
+        {
+          "type": "json_path",
+          "path": "grpc_code",
+          "expect": "OK"
+        },
+        {
+          "type": "json_path",
+          "path": "response.status",
+          "expect": "running"
+        },
+        {
+          "type": "json_path",
+          "path": "response.code",
+          "expect": 0
+        }
       ],
       "exports": [
-        { "path": "response.status", "as": "ctx.server_status" }
+        {
+          "path": "response.status",
+          "as": "ctx.server_status"
+        }
       ]
     },
     {
-      "step_id": "echo",
+      "step_id": "3",
       "type": "grpc_unary",
       "description": "Echo 送 hello，應收到 world",
       "action": {
         "endpoint": "${ctx.grpc_addr}",
-        "service":  "FakeService",
-        "method":   "Echo",
-        "payload":  { "message": "hello" }
+        "service": "FakeService",
+        "method": "Echo",
+        "payload": {
+          "message": "hello"
+        }
       },
       "asserts": [
-        { "type": "json_path", "path": "grpc_code",          "expect": "OK" },
-        { "type": "json_path", "path": "response.message",   "expect": "world" }
+        {
+          "type": "json_path",
+          "path": "grpc_code",
+          "expect": "OK"
+        },
+        {
+          "type": "json_path",
+          "path": "response.message",
+          "expect": "world"
+        }
       ]
     },
     {
-      "step_id": "stop_grpc",
+      "step_id": "4",
       "type": "fake_grpc_stop",
-      "action": { "addr": "${ctx.grpc_addr}" }
+      "action": {
+        "addr": "${ctx.grpc_addr}"
+      },
+      "description": "stop grpc"
     }
   ]
 }

@@ -136,7 +136,7 @@ func (s *Server) handleTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		tc, err := s.catalog.Get(id)
+		tc, err := s.catalog.GetInCategory(id, r.URL.Query().Get("category"))
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -190,7 +190,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Category string `json:"category"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -200,7 +201,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing test case id")
 		return
 	}
-	tc, err := s.catalog.Get(req.ID)
+	tc, err := s.catalog.GetInCategory(req.ID, req.Category)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   const layout = document.getElementById('layout');
   const catalogToggle = document.getElementById('catalog-toggle');
+  const catalogExpandAllBtn = document.getElementById('catalog-expand-all-btn');
+  const catalogCollapseAllBtn = document.getElementById('catalog-collapse-all-btn');
   const catalogSelectBtn = document.getElementById('catalog-select-btn');
   const catalogSelectBar = document.getElementById('catalog-select-bar');
   const catalogSelectedCount = document.getElementById('catalog-selected-count');
@@ -17,6 +19,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const jsonOutput = document.getElementById('json-output');
   const requestOutput = document.getElementById('request-output');
   const testCaseJsonOutput = document.getElementById('testcase-json-output');
+  const testCaseJsonHighlight = document.getElementById('testcase-json-highlight');
+  const testCaseJsonSave = document.getElementById('testcase-json-save');
 
   const btnEditBuilder = document.getElementById('btn-edit-builder');
 
@@ -26,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentTestCase = null;
   let catalogSelectMode = false;
   let selectedCatalogItems = new Map();
+  let testCaseJsonPristine = '';
 
   // Initialize
   initializeCatalogToggle();
@@ -35,6 +40,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   btnRun.addEventListener('click', executeTestCase);
   btnEditBuilder.addEventListener('click', () => { if (currentTestCase) window.loadInBuilder?.(currentTestCase); });
+  testCaseJsonSave.addEventListener('click', saveRunnerTestCaseJson);
+  testCaseJsonOutput.addEventListener('input', () => {
+    updateRunnerJsonHighlight();
+    updateRunnerJsonSaveState();
+  });
+  testCaseJsonOutput.addEventListener('scroll', syncRunnerJsonHighlightScroll);
+  catalogExpandAllBtn.addEventListener('click', () => setAllCatalogFoldersCollapsed(false));
+  catalogCollapseAllBtn.addEventListener('click', () => setAllCatalogFoldersCollapsed(true));
   catalogSelectBtn.addEventListener('click', () => setCatalogSelectMode(!catalogSelectMode));
   catalogCancelSelect.addEventListener('click', () => setCatalogSelectMode(false));
   catalogDeleteSelected.addEventListener('click', deleteSelectedTestCases);
@@ -67,30 +80,143 @@ document.addEventListener('DOMContentLoaded', () => {
   function setCatalogCollapsed(collapsed) {
     layout.classList.toggle('catalog-collapsed', collapsed);
     localStorage.setItem('catalogCollapsed', String(collapsed));
-    catalogToggle.title = collapsed ? 'Expand catalog' : 'Collapse catalog';
+    catalogToggle.title = collapsed ? 'Expand catalog sidebar' : 'Collapse catalog sidebar';
     catalogToggle.setAttribute('aria-label', catalogToggle.title);
+  }
+
+  function setAllCatalogFoldersCollapsed(collapsed) {
+    treeContainer.querySelectorAll('.folder').forEach(folder => {
+      folder.classList.toggle('collapsed', collapsed);
+    });
   }
 
   window.reloadCatalog = fetchTestCases;
 
+  function X(str) {
+    return String(str??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function highlightJsonText(text) {
+    const jsonTokenRe = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
+    let html = '';
+    let lastIndex = 0;
+    String(text ?? '').replace(jsonTokenRe, (match, ...args) => {
+      const offset = args[args.length - 2];
+      html += X(String(text).slice(lastIndex, offset));
+      let cls = 'json-number';
+      if (/^"/.test(match)) cls = /:$/.test(match) ? 'json-key' : 'json-string';
+      else if (/true|false/.test(match)) cls = 'json-boolean';
+      else if (/null/.test(match)) cls = 'json-null';
+      html += `<span class="${cls}">${X(match)}</span>`;
+      lastIndex = offset + match.length;
+      return match;
+    });
+    html += X(String(text ?? '').slice(lastIndex));
+    return html;
+  }
+
+  window.showToast = function(message, type = 'success') {
+    let container = document.getElementById('oa-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'oa-toast-container';
+      container.className = 'oa-toast-container';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = `oa-toast ${type}`;
+    toast.innerHTML = `
+      <span class="oa-toast-dot"></span>
+      <span class="oa-toast-message">${X(message)}</span>
+    `;
+    container.appendChild(toast);
+    window.setTimeout(() => toast.classList.add('leaving'), 2600);
+    window.setTimeout(() => toast.remove(), 3100);
+  };
+
   // ── Custom confirm modal ──
-  window.showConfirm = function(title, msg, confirmLabel = '確定刪除') {
+  window.showConfirm = function(title, msg, confirmLabel = 'Delete') {
     return new Promise(resolve => {
       const overlay  = document.getElementById('oa-modal-overlay');
+      overlay.classList.remove('oa-modal-success');
       document.getElementById('oa-modal-title').textContent   = title;
       document.getElementById('oa-modal-msg').textContent     = msg;
-      document.getElementById('oa-modal-confirm').textContent = confirmLabel;
+      const confirmBtn = document.getElementById('oa-modal-confirm');
+      const cancelBtn = document.getElementById('oa-modal-cancel');
+      confirmBtn.textContent = confirmLabel;
+      confirmBtn.className = 'btn oa-btn-danger';
+      cancelBtn.style.display = '';
       overlay.style.display = 'flex';
 
       function done(result) {
         overlay.style.display = 'none';
         overlay.onclick = null;
-        document.getElementById('oa-modal-confirm').onclick = null;
-        document.getElementById('oa-modal-cancel').onclick  = null;
+        confirmBtn.onclick = null;
+        cancelBtn.onclick  = null;
         resolve(result);
       }
-      document.getElementById('oa-modal-confirm').onclick = () => done(true);
-      document.getElementById('oa-modal-cancel').onclick  = () => done(false);
+      confirmBtn.onclick = () => done(true);
+      cancelBtn.onclick  = () => done(false);
+      overlay.onclick = e => { if (e.target === overlay) done(false); };
+    });
+  };
+
+  window.showDialog = function(title, msg, confirmLabel = 'OK') {
+    return new Promise(resolve => {
+      const overlay  = document.getElementById('oa-modal-overlay');
+      overlay.classList.add('oa-modal-success');
+      document.getElementById('oa-modal-title').textContent = title;
+      document.getElementById('oa-modal-msg').textContent   = msg;
+      const confirmBtn = document.getElementById('oa-modal-confirm');
+      const cancelBtn = document.getElementById('oa-modal-cancel');
+      confirmBtn.textContent = confirmLabel;
+      confirmBtn.className = 'btn btn-primary';
+      cancelBtn.style.display = 'none';
+      overlay.style.display = 'flex';
+
+      function done() {
+        overlay.style.display = 'none';
+        overlay.onclick = null;
+        confirmBtn.onclick = null;
+        cancelBtn.onclick = null;
+        cancelBtn.style.display = '';
+        overlay.classList.remove('oa-modal-success');
+        resolve();
+      }
+      confirmBtn.onclick = done;
+      overlay.onclick = e => { if (e.target === overlay) done(); };
+    });
+  };
+
+  window.showJsonConfirm = function(title, msg, jsonText, confirmLabel = 'Save') {
+    return new Promise(resolve => {
+      const overlay  = document.getElementById('oa-modal-overlay');
+      overlay.classList.remove('oa-modal-success');
+      overlay.classList.add('oa-modal-json');
+      document.getElementById('oa-modal-title').textContent = title;
+      const msgEl = document.getElementById('oa-modal-msg');
+      msgEl.innerHTML = `
+        <div class="oa-modal-json-note">${X(msg)}</div>
+        <pre class="oa-modal-json-box"><code>${X(jsonText)}</code></pre>
+      `;
+      const confirmBtn = document.getElementById('oa-modal-confirm');
+      const cancelBtn = document.getElementById('oa-modal-cancel');
+      confirmBtn.textContent = confirmLabel;
+      confirmBtn.className = 'btn btn-primary';
+      cancelBtn.style.display = '';
+      overlay.style.display = 'flex';
+
+      function done(result) {
+        overlay.style.display = 'none';
+        overlay.onclick = null;
+        confirmBtn.onclick = null;
+        cancelBtn.onclick = null;
+        msgEl.textContent = '';
+        overlay.classList.remove('oa-modal-json');
+        resolve(result);
+      }
+      confirmBtn.onclick = () => done(true);
+      cancelBtn.onclick = () => done(false);
       overlay.onclick = e => { if (e.target === overlay) done(false); };
     });
   };
@@ -239,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon"><polyline points="9 18 15 12 9 6"></polyline></svg>
           <span class="folder-name"></span>
         </span>
-        <button class="folder-delete-btn" type="button" title="Delete folder" aria-label="Delete folder">
+        <button class="folder-delete-btn" type="button" title="Delete this folder" aria-label="Delete this folder">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
         </button>
       `;
@@ -264,14 +390,14 @@ document.addEventListener('DOMContentLoaded', () => {
           item.classList.toggle('catalog-selecting', catalogSelectMode);
           item.classList.toggle('selected', selectedCatalogItems.has(catalogItemKey(tc)));
           item.innerHTML = `
-            <label class="tc-select-wrap" title="Select test case">
+            <label class="tc-select-wrap" title="Select this test case">
               <input class="tc-select-check" type="checkbox"${selectedCatalogItems.has(catalogItemKey(tc)) ? ' checked' : ''}>
             </label>
             <div class="tc-text">
               <div class="tc-name"></div>
               <div class="tc-id"></div>
             </div>
-            <button class="tc-more-btn" type="button" title="Actions" aria-label="Test case actions">
+            <button class="tc-more-btn" type="button" title="More actions" aria-label="More test case actions">
               <svg viewBox="0 0 24 24" fill="currentColor" class="icon"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
             </button>
           `;
@@ -343,7 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function deleteSelectedTestCases() {
     const items = [...selectedCatalogItems.values()];
     if (!items.length) return;
-    if (!await showConfirm('刪除 Test Cases', `確定刪除已選取的 ${items.length} 個 test cases？\n此操作不可復原。`)) return;
+    if (!await showConfirm('Delete Test Cases', `Delete the selected ${items.length} test cases?\nThis action cannot be undone.`)) return;
     try {
       const res = await fetch('/api/testcases/bulk-delete', {
         method: 'POST',
@@ -352,7 +478,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(data.error || '刪除失敗');
+        alert(data.error || 'Delete failed');
         return;
       }
       if (items.some(item => item.id === currentTestCaseId && (!currentTestCaseCategory || item.category === currentTestCaseCategory))) {
@@ -360,18 +486,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       setCatalogSelectMode(false);
     } catch (err) {
-      alert('刪除失敗：' + err.message);
+      alert('Delete failed: ' + err.message);
     }
   }
 
   async function deleteFolder(category) {
     if (!category || category === 'uncategorized') return;
-    if (!await showConfirm('刪除資料夾', `確定刪除「${category}」資料夾？\n資料夾內所有 test cases 都會被刪除，此操作不可復原。`)) return;
+    if (!await showConfirm('Delete Folder', `Delete "${category}" folder?\nAll test cases inside this folder will be deleted. This action cannot be undone.`)) return;
     try {
       const res = await fetch(`/api/catalog/categories/${encodeURIComponent(category)}`, { method: 'DELETE' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(data.error || '刪除資料夾失敗');
+        alert(data.error || 'Delete folder failed');
         return;
       }
       if (currentTestCaseCategory && (currentTestCaseCategory === category || currentTestCaseCategory.startsWith(category + '/'))) {
@@ -379,7 +505,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       fetchTestCases();
     } catch (err) {
-      alert('刪除資料夾失敗：' + err.message);
+      alert('Delete folder failed: ' + err.message);
     }
   }
 
@@ -450,13 +576,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function deleteTestCase(tc) {
-    if (!await showConfirm('刪除 Test Case', `確定刪除「${tc.name}」？\n此操作不可復原。`)) return;
+    if (!await showConfirm('Delete Test Case', `Delete "${tc.name}"?\nThis action cannot be undone.`)) return;
     try {
       const category = tc.category ? `?category=${encodeURIComponent(tc.category)}` : '';
       const res = await fetch(`/api/testcases/${encodeURIComponent(tc.id)}${category}`, { method: 'DELETE' });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        alert(d.error || '刪除失敗');
+        alert(d.error || 'Delete failed');
         return;
       }
       if (currentTestCaseId === tc.id && (!currentTestCaseCategory || currentTestCaseCategory === tc.category)) {
@@ -464,7 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       fetchTestCases();
     } catch (err) {
-      alert('刪除失敗：' + err.message);
+      alert('Delete failed: ' + err.message);
     }
   }
 
@@ -480,7 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stepsList.innerHTML = '<div class="empty-state">No execution data</div>';
     requestOutput.textContent = '// Select an execution step to inspect request data...';
     jsonOutput.textContent = '// Select an execution step to inspect response data...';
-    testCaseJsonOutput.textContent = '// Selected test case JSON will appear here...';
+    setRunnerJsonText('// Selected test case JSON will appear here...', { readonly: true });
   }
 
   function selectTestCase(id, name, element, category = null) {
@@ -499,21 +625,90 @@ document.addEventListener('DOMContentLoaded', () => {
     stepsList.innerHTML = '<div class="empty-state">Ready to execute. Click Execute Run.</div>';
     requestOutput.textContent = '// Select an execution step to inspect request data...';
     jsonOutput.textContent = '// Select an execution step to inspect response data...';
-    testCaseJsonOutput.textContent = '// Loading selected test case JSON...';
-    fetchTestCaseDefinition(id);
+    setRunnerJsonText('// Loading selected test case JSON...', { readonly: true });
+    fetchTestCaseDefinition(id, category);
   }
 
-  async function fetchTestCaseDefinition(id) {
+  async function fetchTestCaseDefinition(id, category = null) {
     try {
-      const res = await fetch(`/api/testcases/${encodeURIComponent(id)}`);
+      const qs = category ? `?category=${encodeURIComponent(category)}` : '';
+      const res = await fetch(`/api/testcases/${encodeURIComponent(id)}${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      if (currentTestCaseId !== id) return;
+      if (currentTestCaseId !== id || currentTestCaseCategory !== category) return;
+      if (category && !data.category) data.category = category;
       currentTestCase = data;
-      showJson(data, testCaseJsonOutput);
+      setRunnerJsonText(JSON.stringify(data, null, 2), { readonly: false });
     } catch (err) {
-      if (currentTestCaseId !== id) return;
-      testCaseJsonOutput.textContent = `// Failed to load test case JSON: ${err.message}`;
+      if (currentTestCaseId !== id || currentTestCaseCategory !== category) return;
+      setRunnerJsonText(`// Failed to load test case JSON: ${err.message}`, { readonly: true });
+    }
+  }
+
+  function setRunnerJsonText(text, { readonly }) {
+    testCaseJsonOutput.value = text;
+    testCaseJsonOutput.readOnly = readonly;
+    testCaseJsonPristine = text;
+    updateRunnerJsonHighlight();
+    updateRunnerJsonSaveState();
+  }
+
+  function updateRunnerJsonHighlight() {
+    testCaseJsonHighlight.innerHTML = highlightJsonText(testCaseJsonOutput.value);
+    syncRunnerJsonHighlightScroll();
+  }
+
+  function syncRunnerJsonHighlightScroll() {
+    testCaseJsonHighlight.parentElement.scrollTop = testCaseJsonOutput.scrollTop;
+    testCaseJsonHighlight.parentElement.scrollLeft = testCaseJsonOutput.scrollLeft;
+  }
+
+  function updateRunnerJsonSaveState() {
+    const dirty = !testCaseJsonOutput.readOnly && testCaseJsonOutput.value !== testCaseJsonPristine;
+    testCaseJsonSave.style.display = dirty ? 'inline-flex' : 'none';
+  }
+
+  async function saveRunnerTestCaseJson() {
+    if (!currentTestCaseId) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(testCaseJsonOutput.value);
+    } catch (err) {
+      await showDialog('Invalid JSON', `The current content is not valid JSON and cannot be saved.\n\n${err.message}`);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      await showDialog('Invalid JSON', 'Test Case JSON must be an object.');
+      return;
+    }
+    if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+      await showDialog('Invalid JSON', 'Test Case JSON must include a non-empty steps array.');
+      return;
+    }
+    const category = parsed.category || currentTestCaseCategory || 'builder';
+    const payload = { ...parsed, category };
+    testCaseJsonSave.disabled = true;
+    try {
+      const res = await fetch('/api/builder/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      if (!parsed.category) parsed.category = category;
+      currentTestCase = parsed;
+      currentTestCaseId = data.id || parsed.id || currentTestCaseId;
+      currentTestCaseCategory = data.category || category;
+      currentTestTitle.textContent = parsed.name || currentTestCaseId;
+      setRunnerJsonText(JSON.stringify(parsed, null, 2), { readonly: false });
+      fetchTestCases();
+      await showDialog('Saved', `Test Case: ${currentTestCaseId}\nCatalog: ${currentTestCaseCategory}`);
+    } catch (err) {
+      await showDialog('Save Failed', err.message);
+    } finally {
+      testCaseJsonSave.disabled = false;
+      updateRunnerJsonSaveState();
     }
   }
 
@@ -535,17 +730,36 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: currentTestCaseId })
+        body: JSON.stringify({ id: currentTestCaseId, category: currentTestCaseCategory || '' })
       });
       const data = await res.json();
       currentRunResult = data;
+      if (!res.ok) {
+        showToast(`Execute Run failed: ${data.error || 'Failed'}`, 'error');
+        renderResult(data);
+        return;
+      }
       renderResult(data);
+      showRunnerRunToast(data);
     } catch (err) {
       stepsList.innerHTML = `<div class="empty-state" style="color:var(--neon-danger)">Execution failed: ${err.message}</div>`;
+      showToast(`Execute Run failed: ${err.message}`, 'error');
     } finally {
       btnRun.disabled = false;
       btnRun.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Execute Run`;
     }
+  }
+
+  function showRunnerRunToast(result) {
+    const steps = Array.isArray(result.steps) ? result.steps : [];
+    const passed = steps.filter(step => step.status === 'passed').length;
+    const failed = steps.filter(step => step.status !== 'passed').length;
+    const elapsed = Number.isFinite(Number(result.elapsed_ms)) ? ` in ${result.elapsed_ms} ms` : '';
+    if (result.status === 'passed') {
+      showToast(`Execute Run passed: ${passed} step${passed === 1 ? '' : 's'}${elapsed}`);
+      return;
+    }
+    showToast(`Execute Run failed: ${passed} passed, ${failed} failed${elapsed}`, 'error');
   }
 
   function renderResult(result) {
@@ -645,23 +859,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function showJson(obj, target) {
     const jsonStr = JSON.stringify(obj, null, 2);
-    // Syntax highlighting
-    const highlighted = jsonStr.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-        let cls = 'json-number';
-        if (/^"/.test(match)) {
-            if (/:$/.test(match)) {
-                cls = 'json-key';
-            } else {
-                cls = 'json-string';
-            }
-        } else if (/true|false/.test(match)) {
-            cls = 'json-boolean';
-        } else if (/null/.test(match)) {
-            cls = 'json-null';
-        }
-        return '<span class="' + cls + '">' + match + '</span>';
-    });
-    target.innerHTML = highlighted;
+    target.innerHTML = highlightJsonText(jsonStr);
   }
 });
 
@@ -719,10 +917,26 @@ document.addEventListener('DOMContentLoaded', () => {
   const runAllBtn  = document.getElementById('builder-run-all-btn');
   const saveBtn    = document.getElementById('builder-save-btn');
   const saveMsgEl  = document.getElementById('builder-save-msg');
+  const categoryInput = document.getElementById('tc-category');
+  const categoryPickerBtn = document.getElementById('builder-cat-picker-btn');
+  const categoryMenu = document.createElement('div');
+  categoryMenu.className = 'builder-cat-menu';
+  categoryMenu.style.display = 'none';
+  document.body.appendChild(categoryMenu);
+  let builderCategories = [];
 
   addBtn.addEventListener('click', () => addStep());
   runAllBtn.addEventListener('click', runAll);
   saveBtn.addEventListener('click', saveTC);
+  categoryPickerBtn.addEventListener('click', () => {
+    if (categoryMenu.style.display === 'none') showCategoryMenu();
+    else hideCategoryMenu();
+  });
+  categoryInput.addEventListener('focus', hideCategoryMenu);
+  document.addEventListener('click', e => {
+    if (!categoryMenu.contains(e.target) && !e.target.closest('.catalog-picker')) hideCategoryMenu();
+  });
+  window.addEventListener('resize', hideCategoryMenu);
 
   // ══════════════════════════════════════════
   // CONTEXT VARIABLES (localStorage)
@@ -963,7 +1177,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function addStep(type = 'grpc_unary') {
     stepSeq++;
     const s = {
-      _id: stepSeq, stepId: `step_${stepSeq}`, type,
+      _id: stepSeq, stepDescription: '', type,
       // grpc_unary
       endpoint: '', proxyMode: false, proxyEndpoint: '',
       services: [], selectedService: '', selectedMethod: '',
@@ -1024,13 +1238,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function moveStep(id, dir) {
     const idx = tcSteps.findIndex(s => s._id === id);
     if (idx < 0) return;
-    const ni = idx + dir;
-    if (ni < 0 || ni >= tcSteps.length) return;
-    [tcSteps[idx], tcSteps[ni]] = [tcSteps[ni], tcSteps[idx]];
-    const cards = [...stepsEl.querySelectorAll('.builder-step-card')];
-    dir === -1 ? stepsEl.insertBefore(cards[idx], cards[ni])
-               : stepsEl.insertBefore(cards[ni], cards[idx]);
+    moveStepTo(id, idx + dir);
+  }
+
+  function moveStepTo(id, toIndex) {
+    const fromIndex = tcSteps.findIndex(s => s._id === id);
+    if (fromIndex < 0) return;
+    const boundedIndex = Math.max(0, Math.min(toIndex, tcSteps.length - 1));
+    if (fromIndex === boundedIndex) return;
+    const [step] = tcSteps.splice(fromIndex, 1);
+    tcSteps.splice(boundedIndex, 0, step);
+    syncStepCardOrder();
     renderStepTabs();
+  }
+
+  function syncStepCardOrder() {
+    tcSteps.forEach(step => {
+      const card = stepsEl.querySelector(`.builder-step-card[data-step-id="${step._id}"]`);
+      if (card) stepsEl.appendChild(card);
+    });
   }
 
   // ── Tab management ──
@@ -1044,18 +1270,72 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderStepTabs() {
     stepTabsEl.innerHTML = '';
     tcSteps.forEach((s, i) => {
-      const tab = document.createElement('button');
+      const tab = document.createElement('div');
       tab.className = 'bldr-step-tab' + (s._id === activeStepId ? ' active' : '');
+      tab.draggable = true;
+      tab.dataset.stepId = s._id;
+      tab.setAttribute('role', 'button');
+      tab.setAttribute('tabindex', '0');
       const typeShort = s.type.replace('websocket_', 'ws_').replace('fake_', 'f_').replace('_request', '').replace('_unary', '');
-      tab.innerHTML = `<span>Step ${i + 1}</span><span class="bldr-tab-type">${typeShort}</span><button class="bldr-tab-close" title="Remove">×</button>`;
+      const label = s.stepDescription ? ` - ${s.stepDescription}` : '';
+      tab.innerHTML = `<span>Step ${i + 1}</span><span class="bldr-tab-type">${typeShort}${X(label)}</span><button class="bldr-tab-close" type="button" title="Remove">×</button>`;
       tab.addEventListener('click', e => {
         if (e.target.classList.contains('bldr-tab-close')) return;
         setActiveStep(s._id);
         renderStepTabs();
       });
+      tab.addEventListener('keydown', e => {
+        if (e.target.classList.contains('bldr-tab-close')) return;
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        setActiveStep(s._id);
+        renderStepTabs();
+      });
+      tab.addEventListener('dragstart', e => {
+        if (e.target.classList.contains('bldr-tab-close')) {
+          e.preventDefault();
+          return;
+        }
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(s._id));
+        tab.classList.add('bldr-tab-dragging');
+      });
+      tab.addEventListener('dragend', () => {
+        stepTabsEl.querySelectorAll('.bldr-step-tab').forEach(el => {
+          el.classList.remove('bldr-tab-dragging', 'bldr-tab-drop-before', 'bldr-tab-drop-after');
+        });
+      });
+      tab.addEventListener('dragover', e => {
+        e.preventDefault();
+        const rect = tab.getBoundingClientRect();
+        const before = e.clientX < rect.left + rect.width / 2;
+        stepTabsEl.querySelectorAll('.bldr-step-tab').forEach(el => {
+          el.classList.remove('bldr-tab-drop-before', 'bldr-tab-drop-after');
+        });
+        tab.classList.add(before ? 'bldr-tab-drop-before' : 'bldr-tab-drop-after');
+        e.dataTransfer.dropEffect = 'move';
+      });
+      tab.addEventListener('dragleave', () => {
+        tab.classList.remove('bldr-tab-drop-before', 'bldr-tab-drop-after');
+      });
+      tab.addEventListener('drop', e => {
+        e.preventDefault();
+        const draggedId = Number(e.dataTransfer.getData('text/plain'));
+        if (!draggedId || draggedId === s._id) return;
+        const rect = tab.getBoundingClientRect();
+        const before = e.clientX < rect.left + rect.width / 2;
+        let targetIndex = tcSteps.findIndex(step => step._id === s._id);
+        const fromIndex = tcSteps.findIndex(step => step._id === draggedId);
+        if (targetIndex < 0 || fromIndex < 0) return;
+        if (!before) targetIndex += 1;
+        if (fromIndex < targetIndex) targetIndex -= 1;
+        moveStepTo(draggedId, targetIndex);
+        setActiveStep(draggedId);
+        renderStepTabs();
+      });
       tab.querySelector('.bldr-tab-close').addEventListener('click', async e => {
         e.stopPropagation();
-        if (!await showConfirm('刪除步驟', `確定移除 Step ${i + 1}（${s.type}）？`)) return;
+        if (!await showConfirm('Delete Step', `Remove Step ${i + 1} (${s.type})?`)) return;
         removeStep(s._id);
       });
       stepTabsEl.appendChild(tab);
@@ -1111,7 +1391,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="bldr-run-label">Run Step</span>
         </button>
         <select class="exp-select bldr-type-select" style="width:175px;font-size:12px;padding:5px 28px 5px 8px">${typeSelectHTML(s.type)}</select>
-        <input class="exp-input bldr-step-id-input" value="${X(s.stepId)}" placeholder="step_id" title="Step ID" style="font-family:monospace;font-size:12px;color:var(--text-secondary)">
+        <input class="exp-input bldr-step-desc-input" value="${X(s.stepDescription)}" placeholder="Step description" title="Step Description">
         <div class="bldr-card-controls">
           <button class="btn btn-sm bldr-up-btn" title="Move up">↑</button>
           <button class="btn btn-sm bldr-dn-btn" title="Move down">↓</button>
@@ -1221,11 +1501,13 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
         `}
-        <label class="exp-label" style="margin-top:10px">Proto Files <span class="exp-optional">(optional)</span></label>
-        <div class="exp-row">
-          <input class="exp-input exp-input-grow bldr-protos-in" value="${X(s.protoFiles)}" placeholder="../distributedqueryserver/proto/ClassicalBaccaratManagement.proto"/>
-          <button class="btn btn-accent btn-sm bldr-browse-proto-btn" type="button">Browse</button>
-        </div>
+        ${s.proxyMode ? `
+          <label class="exp-label" style="margin-top:10px">Proto Files <span class="exp-optional">(optional)</span></label>
+          <div class="exp-row">
+            <input class="exp-input exp-input-grow bldr-protos-in" value="${X(s.protoFiles)}" placeholder="../distributeproto/ClassicalBaccaratManagement.proto"/>
+            <button class="btn btn-accent btn-sm bldr-browse-proto-btn" type="button">Browse</button>
+          </div>
+        ` : ''}
       </div>
       <div class="exp-section">
         <div class="exp-section-header">
@@ -1339,7 +1621,10 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div>
             <label class="exp-label">DSN</label>
-            <input class="exp-input bldr-db-dsn-in" value="${X(s.dbDsn)}" placeholder="user=gms password=666 dbname=baccarat_game host=localhost sslmode=disable"/>
+            <div class="exp-row">
+              <input class="exp-input exp-input-grow bldr-db-dsn-in" value="${X(s.dbDsn)}" placeholder="host=127.0.0.1 port=5432 user=baccarat password=666666 dbname=baccarat_game sslmode=disable"/>
+              <button class="btn btn-accent btn-sm bldr-db-dsn-edit-btn" type="button">Edit</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1440,12 +1725,15 @@ document.addEventListener('DOMContentLoaded', () => {
       attachForm(card, s);
       renderStepTabs(); // update tab label to reflect new type
     });
-    bind(card, '.bldr-step-id-input', 'input', e => { s.stepId = e.target.value.trim(); });
+    bind(card, '.bldr-step-desc-input', 'input', e => {
+      s.stepDescription = e.target.value.trim();
+      renderStepTabs();
+    });
     card.querySelector('.bldr-up-btn').addEventListener('click', () => moveStep(s._id, -1));
     card.querySelector('.bldr-dn-btn').addEventListener('click', () => moveStep(s._id,  1));
     card.querySelector('.bldr-del-btn').addEventListener('click', async () => {
       const idx = tcSteps.findIndex(t => t._id === s._id);
-      if (!await showConfirm('刪除步驟', `確定移除 Step ${idx + 1}（${s.type}）？`)) return;
+      if (!await showConfirm('Delete Step', `Remove Step ${idx + 1} (${s.type})?`)) return;
       removeStep(s._id);
     });
     card.querySelector('.bldr-run-step-btn').addEventListener('click', () => runStep(s, card));
@@ -1668,6 +1956,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function attachDb(card, s) {
     bind(card, '.bldr-db-driver-sel', 'change', e => s.dbDriver = e.target.value);
     bind(card, '.bldr-db-dsn-in',     'input',  e => s.dbDsn    = e.target.value);
+    bind(card, '.bldr-db-dsn-edit-btn', 'click', () => openDbDsnEditor(s, card));
     bind(card, '.bldr-db-sql-ta',     'input',  e => s.dbSql    = e.target.value);
   }
 
@@ -1767,8 +2056,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function buildStepJSON(s) {
-    const obj = { step_id: s.stepId || `step_${s._id}`, type: s.type, action: collectAction(s) };
+  function buildStepJSON(s, index = tcSteps.indexOf(s)) {
+    const obj = { step_id: String(index + 1), type: s.type, action: collectAction(s) };
+    if (s.stepDescription) obj.description = s.stepDescription;
     if (s.asserts?.length) {
       obj.asserts = s.asserts
         .filter(a => a.path)
@@ -1806,7 +2096,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resultSection) resultSection.style.display = '';
     resultEl.innerHTML = '';
     try {
-      const stepJSON = buildStepJSON(s);
+      const stepJSON = buildStepJSON(s, tcSteps.findIndex(step => step._id === s._id));
       // inject localStorage ctx so individual steps can use exported values
       stepJSON.action = injectCtx(stepJSON.action);
       stepJSON.timeout_ms = +document.getElementById('tc-timeout').value || 30000;
@@ -1814,12 +2104,25 @@ document.addEventListener('DOMContentLoaded', () => {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(stepJSON)
       });
       const data = await res.json();
-      if (!res.ok) { renderResult(resultEl, null, data.error||'Failed'); return; }
+      if (!res.ok) {
+        const msg = data.error || 'Failed';
+        renderResult(resultEl, null, msg);
+        showToast(`Step ${stepIndexOf(s)} failed: ${msg}`, 'error');
+        return;
+      }
       s.result = data;
       // save exported values to localStorage context
       if (data.values) saveCtxValues(data.values);
       renderResult(resultEl, data);
-    } catch(err) { renderResult(resultEl, null, err.message); }
+      if (data.status === 'passed') {
+        showToast(`Step ${stepIndexOf(s)} passed in ${data.elapsed_ms} ms`);
+      } else {
+        showToast(`Step ${stepIndexOf(s)} failed${data.error ? ': ' + data.error : ''}`, 'error');
+      }
+    } catch(err) {
+      renderResult(resultEl, null, err.message);
+      showToast(`Step ${stepIndexOf(s)} failed: ${err.message}`, 'error');
+    }
     finally {
       const remainingMS = minRunVisibleMS - (performance.now() - runStartedAt);
       if (remainingMS > 0) await sleep(remainingMS);
@@ -1834,6 +2137,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function stepIndexOf(step) {
+    const index = tcSteps.findIndex(s => s._id === step._id);
+    return index >= 0 ? index + 1 : '?';
   }
 
   // ── Render step result ──
@@ -1872,6 +2180,12 @@ document.addEventListener('DOMContentLoaded', () => {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(tc)
       });
       const runResult = await res.json();
+      if (!res.ok) {
+        showToast(`Run All failed: ${runResult.error || 'Failed'}`, 'error');
+        return;
+      }
+      let passed = 0;
+      let failed = 0;
       runResult.steps?.forEach((sr, i) => {
         const step = tcSteps[i];
         if (!step) return;
@@ -1883,8 +2197,15 @@ document.addEventListener('DOMContentLoaded', () => {
         renderResult(resultEl, sr);
         step.result = sr;
         if (sr.values) saveCtxValues(sr.values);
+        if (sr.status === 'passed') passed++;
+        else failed++;
       });
-    } catch(err) { console.error(err); }
+      if (failed) showToast(`Run All finished: ${passed} passed, ${failed} failed`, 'error');
+      else showToast(`Run All passed: ${passed} step${passed === 1 ? '' : 's'}`);
+    } catch(err) {
+      console.error(err);
+      showToast(`Run All failed: ${err.message}`, 'error');
+    }
     finally {
       overlay.remove();
       runAllBtn.disabled = false;
@@ -1897,15 +2218,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const name = document.getElementById('tc-name').value.trim();
     if (!name) { setMsg('Name is required', 'error'); return; }
     if (!tcSteps.length) { setMsg('Add at least one step', 'error'); return; }
+    const payload = { ...buildTC(), category: document.getElementById('tc-category').value.trim() || 'builder' };
+    setMsg('Waiting for confirmation…', '');
+    const okToSave = await showJsonConfirm(
+      'Confirm Save Test Case',
+      `Review the JSON before saving to Catalog: ${payload.category}`,
+      JSON.stringify(payload, null, 2)
+    );
+    if (!okToSave) { setMsg('', ''); return; }
     saveBtn.disabled = true; setMsg('Saving…', '');
     try {
-      const payload = { ...buildTC(), category: document.getElementById('tc-category').value.trim() || 'builder' };
       const res = await fetch('/api/builder/save', {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok) { setMsg(data.error||'Save failed', 'error'); return; }
-      setMsg(`✓ Saved as "${data.id}" in ${data.category}`, 'success');
+      setMsg('', '');
+      showToast(`Saved "${data.id}" in ${data.category}`);
       window.reloadCatalog?.();
       loadBuilderCategories();
     } catch(err) { setMsg(err.message, 'error'); }
@@ -1918,7 +2247,7 @@ document.addEventListener('DOMContentLoaded', () => {
       name:        document.getElementById('tc-name').value.trim(),
       description: document.getElementById('tc-description').value.trim(),
       config:      { timeout_ms: +document.getElementById('tc-timeout').value || 30000 },
-      steps:       tcSteps.map(buildStepJSON),
+      steps:       tcSteps.map((step, index) => buildStepJSON(step, index)),
     };
   }
 
@@ -1933,12 +2262,45 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/explore/categories');
       if (!res.ok) return;
       const cats = await res.json();
-      const dl = document.getElementById('builder-cat-list');
-      if (!dl || !Array.isArray(cats)) return;
-      dl.innerHTML = cats.map(c => `<option value="${X(c)}">`).join('');
+      if (!Array.isArray(cats)) return;
+      builderCategories = [...new Set(cats.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      renderCategoryMenu();
     } catch {}
   }
   window.loadBuilderCategories = loadBuilderCategories;
+
+  function renderCategoryMenu() {
+    if (!builderCategories.length) {
+      categoryMenu.innerHTML = '<div class="builder-cat-empty">No catalogs yet</div>';
+      return;
+    }
+    categoryMenu.innerHTML = builderCategories.map(cat => `
+      <button class="builder-cat-option" type="button" data-category="${X(cat)}">
+        <span>${X(cat)}</span>
+      </button>
+    `).join('');
+    categoryMenu.querySelectorAll('.builder-cat-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        categoryInput.value = btn.dataset.category || '';
+        hideCategoryMenu();
+        categoryInput.focus();
+      });
+    });
+  }
+
+  async function showCategoryMenu() {
+    await loadBuilderCategories();
+    renderCategoryMenu();
+    const rect = categoryInput.getBoundingClientRect();
+    categoryMenu.style.width = rect.width + 'px';
+    categoryMenu.style.left = rect.left + 'px';
+    categoryMenu.style.top = (rect.bottom + 6) + 'px';
+    categoryMenu.style.display = '';
+  }
+
+  function hideCategoryMenu() {
+    categoryMenu.style.display = 'none';
+  }
 
   // ── Load a saved test case into the builder ──
   window.loadInBuilder = function loadInBuilder(tc) {
@@ -1984,7 +2346,7 @@ document.addEventListener('DOMContentLoaded', () => {
     stepSeq++;
     const a = (typeof sj.action === 'string') ? tryJSON(sj.action, {}) : (sj.action || {});
     const s = {
-      _id: stepSeq, stepId: sj.step_id || `step_${stepSeq}`, type: sj.type || 'grpc_unary',
+      _id: stepSeq, stepDescription: sj.description || stepIDToDescription(sj.step_id), type: sj.type || 'grpc_unary',
       endpoint: '', proxyMode: false, proxyEndpoint: '',
       services: [], selectedService: '', selectedMethod: '',
       metadata: [], protoFiles: '', payload: '{}',
@@ -2077,6 +2439,91 @@ document.addEventListener('DOMContentLoaded', () => {
     s = String(s).trim();
     if (s==='true') return true; if (s==='false') return false; if (s==='null') return null;
     const n = Number(s); return (!isNaN(n)&&s!=='') ? n : s;
+  }
+  async function openDbDsnEditor(s, card) {
+    const initial = parseDsnFields(s.dbDsn);
+    const overlay = document.createElement('div');
+    overlay.className = 'oa-modal-overlay oa-db-dsn-overlay';
+    overlay.innerHTML = `
+      <div class="oa-modal glass-panel oa-db-dsn-modal">
+        <div class="oa-modal-body">
+          <div class="oa-modal-title">Edit Database Connection</div>
+          <div class="oa-db-dsn-grid">
+            <label><span>Host</span><input class="exp-input db-host" value="${X(initial.host)}" placeholder="127.0.0.1"></label>
+            <label><span>Port</span><input class="exp-input db-port" value="${X(initial.port)}" placeholder="5432"></label>
+            <label><span>User</span><input class="exp-input db-user" value="${X(initial.user)}" placeholder="baccarat"></label>
+            <label><span>Password</span><input class="exp-input db-password" value="${X(initial.password)}" placeholder="666666" type="password"></label>
+            <label><span>Database</span><input class="exp-input db-dbname" value="${X(initial.dbname)}" placeholder="baccarat_game"></label>
+            <label><span>SSL Mode</span>
+              <select class="exp-select db-sslmode">
+                ${['disable','require','verify-ca','verify-full'].map(v => `<option value="${v}"${initial.sslmode === v ? ' selected' : ''}>${v}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <label class="oa-db-raw-label">
+            <span>Raw DSN</span>
+            <textarea class="exp-textarea db-raw" spellcheck="false" rows="3">${X(s.dbDsn)}</textarea>
+          </label>
+        </div>
+        <div class="oa-modal-actions">
+          <button class="btn db-cancel" type="button">Cancel</button>
+          <button class="btn btn-primary db-apply" type="button">Apply</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const raw = overlay.querySelector('.db-raw');
+    const fields = ['host', 'port', 'user', 'password', 'dbname', 'sslmode'];
+    const getField = key => overlay.querySelector(`.db-${key}`);
+    const syncRaw = () => { raw.value = buildDsnFromFields(Object.fromEntries(fields.map(k => [k, getField(k).value]))); };
+    fields.forEach(k => getField(k).addEventListener('input', syncRaw));
+    getField('sslmode').addEventListener('change', syncRaw);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.db-cancel').addEventListener('click', close);
+    overlay.querySelector('.db-apply').addEventListener('click', () => {
+      s.dbDsn = raw.value.trim();
+      const input = card.querySelector('.bldr-db-dsn-in');
+      if (input) input.value = s.dbDsn;
+      close();
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    overlay.querySelector('.db-host')?.focus();
+  }
+
+  function parseDsnFields(dsn) {
+    const out = { host: '', port: '', user: '', password: '', dbname: '', sslmode: 'disable' };
+    const re = /(\w+)=((?:"[^"]*")|'[^']*'|[^\s]+)/g;
+    let match;
+    while ((match = re.exec(String(dsn || ''))) !== null) {
+      const key = match[1];
+      let val = match[2] || '';
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (Object.prototype.hasOwnProperty.call(out, key)) out[key] = val;
+    }
+    return out;
+  }
+
+  function buildDsnFromFields(fields) {
+    return ['host', 'port', 'user', 'password', 'dbname', 'sslmode']
+      .map(key => [key, String(fields[key] || '').trim()])
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${key}=${quoteDsnValue(value)}`)
+      .join(' ');
+  }
+
+  function quoteDsnValue(value) {
+    if (!/\s/.test(value)) return value;
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  function stepIDToDescription(stepID) {
+    const raw = String(stepID || '').trim();
+    if (!raw || /^\d+$/.test(raw) || /^step_?\d+$/i.test(raw)) return '';
+    return raw.replace(/_/g, ' ');
   }
   function X(str) {
     return String(str??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

@@ -2,71 +2,100 @@
   "id": "sample_db_check",
   "name": "Sample: DB Check",
   "description": "示範 db_check executor 查 SQLite，驗證白盒狀態。測試會先建立本地 users fixture，再查詢資料。",
-  "config": { "timeout_ms": 10000 },
+  "config": {
+    "timeout_ms": 10000
+  },
   "steps": [
     {
-      "step_id": "load_config",
+      "step_id": "1",
       "type": "include",
-      "action": { "file_path": "config/fake.yaml" },
+      "action": {
+        "file_path": "config/fake.yaml"
+      },
       "exports": [
-        { "path": "db.driver", "as": "ctx.db_driver" },
-        { "path": "db.dsn",    "as": "ctx.db_dsn" }
-      ]
+        {
+          "path": "db.driver",
+          "as": "ctx.db_driver"
+        },
+        {
+          "path": "db.dsn",
+          "as": "ctx.db_dsn"
+        }
+      ],
+      "description": "load config"
     },
     {
-      "step_id": "reset_users_table",
+      "step_id": "2",
       "type": "db_check",
       "description": "重置 users 測試資料表",
       "action": {
         "driver": "${ctx.db_driver}",
-        "dsn":    "${ctx.db_dsn}",
-        "sql":    "DROP TABLE IF EXISTS users"
+        "dsn": "${ctx.db_dsn}",
+        "sql": "DROP TABLE IF EXISTS users"
       }
     },
     {
-      "step_id": "create_users_table",
+      "step_id": "3",
       "type": "db_check",
       "description": "建立 users 測試資料表",
       "action": {
         "driver": "${ctx.db_driver}",
-        "dsn":    "${ctx.db_dsn}",
-        "sql":    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+        "dsn": "${ctx.db_dsn}",
+        "sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
       }
     },
     {
-      "step_id": "seed_user_alice",
+      "step_id": "4",
       "type": "db_check",
       "description": "寫入 alice fixture",
       "action": {
         "driver": "${ctx.db_driver}",
-        "dsn":    "${ctx.db_dsn}",
-        "sql":    "INSERT INTO users (id, name) VALUES (?, ?)",
-        "args":   [1, "alice"]
+        "dsn": "${ctx.db_dsn}",
+        "sql": "INSERT INTO users (id, name) VALUES (?, ?)",
+        "args": [
+          1,
+          "alice"
+        ]
       }
     },
     {
-      "step_id": "check_user_exists",
+      "step_id": "5",
       "type": "db_check",
       "description": "查詢 users 表，確認 id=1 的資料存在",
       "action": {
         "driver": "${ctx.db_driver}",
-        "dsn":    "${ctx.db_dsn}",
-        "sql":    "SELECT id, name FROM users WHERE id = ?",
-        "args":   [1]
+        "dsn": "${ctx.db_dsn}",
+        "sql": "SELECT id, name FROM users WHERE id = ?",
+        "args": [
+          1
+        ]
       },
       "asserts": [
-        { "type": "json_path", "path": "row_count",    "expect": 1 },
-        { "type": "json_path", "path": "rows.0.name",  "expect": "alice" }
+        {
+          "type": "json_path",
+          "path": "row_count",
+          "expect": 1
+        },
+        {
+          "type": "json_path",
+          "path": "rows.0.name",
+          "expect": "alice"
+        }
       ],
       "exports": [
-        { "path": "rows.0.name", "as": "ctx.user_name" }
+        {
+          "path": "rows.0.name",
+          "as": "ctx.user_name"
+        }
       ]
     },
     {
-      "step_id": "delay_after_check",
+      "step_id": "6",
       "type": "delay",
       "description": "確認 export 正常後短暫等待",
-      "action": { "duration_ms": 100 }
+      "action": {
+        "duration_ms": 100
+      }
     }
   ]
 }

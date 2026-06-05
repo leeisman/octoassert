@@ -7,7 +7,7 @@
   },
   "steps": [
     {
-      "step_id": "call",
+      "step_id": "1",
       "type": "grpc_unary",
       "description": "management.DistributeServiceManagement/FetchServerList",
       "action": {
