@@ -1584,7 +1584,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <span style="color:var(--text-muted);font-size:12px">${r.elapsed_ms||0} ms</span>
           </div>
         </div>
-        <button class="btn btn-sm btn-outline batch-global-oplog-btn" type="button" style="display:none;align-items:center;gap:6px">
+        <button class="btn btn-sm btn-outline bldr-result-oplog-btn batch-global-oplog-btn" type="button" style="display:none;align-items:center;gap:6px;margin-left:0">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
           Step Log
         </button>
@@ -1606,7 +1606,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <div style="font-weight:600;font-size:13px">Step ${sIdx+1}: ${X(step.type)}</div>
               <div style="display:flex;gap:8px">
 
-                <button class="btn btn-sm btn-outline batch-tree-btn" data-sidx="${sIdx}" type="button" style="display:flex;align-items:center;gap:6px">
+                <button class="btn btn-sm btn-outline bldr-result-tree-btn batch-tree-btn" data-sidx="${sIdx}" type="button" style="display:flex;align-items:center;gap:6px;margin-left:0">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/><path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/></svg>
                   JSON Tree
                 </button>
