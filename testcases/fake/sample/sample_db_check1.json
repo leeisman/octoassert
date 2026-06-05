@@ -1,0 +1,110 @@
+{
+  "id": "sample_db_check1",
+  "name": "Sample: DB Check",
+  "description": "示範 db_check executor 查 SQLite，驗證白盒狀態。測試會先建立本地 users fixture，再查詢資料。",
+  "config": {
+    "timeout_ms": 10000
+  },
+  "steps": [
+    {
+      "step_id": "1",
+      "type": "include",
+      "description": "load config",
+      "action": {
+        "file_path": "config/fake.yaml"
+      },
+      "asserts": null,
+      "exports": [
+        {
+          "path": "db.driver",
+          "as": "ctx.db_driver"
+        },
+        {
+          "path": "db.dsn",
+          "as": "ctx.db_dsn"
+        }
+      ]
+    },
+    {
+      "step_id": "2",
+      "type": "db_check",
+      "description": "重置 users 測試資料表",
+      "action": {
+        "driver": "${ctx.db_driver}",
+        "dsn": "${ctx.db_dsn}",
+        "sql": "DROP TABLE IF EXISTS users"
+      },
+      "asserts": null,
+      "exports": null
+    },
+    {
+      "step_id": "3",
+      "type": "db_check",
+      "description": "建立 users 測試資料表",
+      "action": {
+        "driver": "${ctx.db_driver}",
+        "dsn": "${ctx.db_dsn}",
+        "sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
+      },
+      "asserts": null,
+      "exports": null
+    },
+    {
+      "step_id": "4",
+      "type": "db_check",
+      "description": "寫入 alice fixture",
+      "action": {
+        "driver": "${ctx.db_driver}",
+        "dsn": "${ctx.db_dsn}",
+        "sql": "INSERT INTO users (id, name) VALUES (?, ?)",
+        "args": [
+          1,
+          "alice"
+        ]
+      },
+      "asserts": null,
+      "exports": null
+    },
+    {
+      "step_id": "5",
+      "type": "db_check",
+      "description": "查詢 users 表，確認 id=1 的資料存在",
+      "action": {
+        "driver": "${ctx.db_driver}",
+        "dsn": "${ctx.db_dsn}",
+        "sql": "SELECT id, name FROM users WHERE id = ?",
+        "args": [
+          1
+        ]
+      },
+      "asserts": [
+        {
+          "type": "json_path",
+          "path": "row_count",
+          "expect": 1
+        },
+        {
+          "type": "json_path",
+          "path": "rows.0.name",
+          "expect": "alice"
+        }
+      ],
+      "exports": [
+        {
+          "path": "rows.0.name",
+          "as": "ctx.user_name"
+        }
+      ]
+    },
+    {
+      "step_id": "6",
+      "type": "delay",
+      "description": "確認 export 正常後短暫等待",
+      "action": {
+        "duration_ms": 100
+      },
+      "asserts": null,
+      "exports": null
+    }
+  ]
+}

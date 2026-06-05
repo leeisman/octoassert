@@ -781,7 +781,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="step-marker"></div>
           <div class="step-content">
             <div class="step-header">
-              <span class="step-name">${step.name}</span>
+              <span class="step-name">${step.step_id}</span>
               <span class="step-type">${step.type}</span>
             </div>
             <div class="step-time">${step.elapsed_ms} ms</div>
@@ -810,9 +810,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildStepRequestData(step) {
     return compactObject({
-      name: step.name,
+      step_id: step.step_id,
       type: step.type,
-      description: step.request?.description,
+      description: step.description || step.request?.description,
       action: parseMaybeJson(step.request?.action),
       asserts: step.request?.asserts,
       exports: formatExports(step.request?.exports),
@@ -831,7 +831,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildStepResponseData(step) {
     return compactObject({
-      name: step.name,
+      step_id: step.step_id,
       type: step.type,
       status: step.status,
       elapsed_ms: step.elapsed_ms,

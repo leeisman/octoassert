@@ -105,7 +105,7 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 func failedStep(step testcase.Step, err error) StepResult {
 	now := time.Now()
 	return StepResult{
-		Name:       step.StepID,
+		StepID:     step.StepID,
 		Type:       step.Type,
 		Status:     StatusFailed,
 		StartedAt:  now,

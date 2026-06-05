@@ -28,7 +28,8 @@ func (e *Executor) Type() string { return "group" }
 func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext, step testcase.Step) runner.StepResult {
 	started := time.Now()
 	res := runner.StepResult{
-		Name:      step.StepID,
+		StepID:   step.StepID,
+		Description: step.Description,
 		Type:      step.Type,
 		StartedAt: started,
 		Status:    runner.StatusPassed,

@@ -24,7 +24,8 @@ type RunResult struct {
 }
 
 type StepResult struct {
-	Name            string          `json:"name"`
+	StepID          string          `json:"step_id"`
+	Description     string          `json:"description,omitempty"`
 	Type            string          `json:"type"`
 	Status          Status          `json:"status"`
 	StartedAt       time.Time       `json:"started_at"`

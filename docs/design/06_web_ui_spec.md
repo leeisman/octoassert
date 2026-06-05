@@ -6,14 +6,21 @@ Web UI 是唯一主要操作介面，負責瀏覽 test case、執行測試與觀
 
 ## Layout
 
-第一版採左右分欄：
+第一版已進化為旗艦級介面，採用深色模式（Dark Mode）、毛玻璃特效（Glassmorphism）與極簡設計：
 
-```text
-Test Case Tree      Response Console
-  folders             Run Summary
-  test cases          Step Results
-                      Raw Response
-```
+1. **左側 Catalog Tree (Catalog Explorer)**
+   - 樹狀顯示所有 Test Cases (`testcases/*`)，支援多層級資料夾。
+   - 支援快速點擊展開/收合。
+   - 右鍵選單支援 Run, Edit (進入 Builder), Duplicate, Delete, Select 等操作。
+   - 頂部支援搜尋過濾。
+
+2. **中間/右側 Test Case Builder & Runner Orchestrator**
+   - **Test Case 資訊**: 顯示 ID, Name, Description, 設定 Timeout。
+   - **Step 編輯/預覽區域**:
+     - **左右分欄佈局 (Side-by-side Layout)**:
+       - 左側：**Step Data** (參數、設定、Asserts、Exports)，可點擊收合按鈕 (Horizontal Collapse) 變為極窄側邊欄。
+       - 右側：**Step Response** (執行結果的 JSON)，最高可達 `600px` 顯示超大 JSON，當左側收合時，右側自動展開佔據接近 100% 寬度。
+   - 視覺反饋明確：失敗標紅、成功標綠、載入中動畫。
 
 ---
 
@@ -56,10 +63,12 @@ queryserver
 ## API Contract
 
 ```
-GET  /api/testcases          列出所有 test case 摘要
-GET  /api/testcases/{id}     取得指定 test case 完整內容
-POST /api/run                執行指定 test case（body: {"id": "test_001"}）
-GET  /api/runs               列出執行紀錄
+GET    /api/testcases          列出所有 test case 摘要
+GET    /api/testcases/{id}     取得指定 test case 完整內容
+POST   /api/testcases          建立或覆寫 test case
+DELETE /api/testcases/{id}     刪除 test case
+POST   /api/testcases/{id}/duplicate 複製 test case
+POST   /api/run                執行指定 test case（body: {"id": "test_001"}）
 ```
 
 執行 timeout 以 test case 的 `config.timeout_ms` 為準，未設定時預設 30 秒。

@@ -25,7 +25,8 @@ func (e *Executor) Type() string {
 func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step testcase.Step) runner.StepResult {
 	started := time.Now()
 	result := runner.StepResult{
-		Name:      step.StepID,
+		StepID:   step.StepID,
+		Description: step.Description,
 		Type:      step.Type,
 		Status:    runner.StatusPassed,
 		StartedAt: started,
