@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"octoassert/internal/testcase"
 )
@@ -42,6 +43,9 @@ func (c *Catalog) List() ([]testcase.TestCase, error) {
 		return nil, err
 	}
 	sort.Slice(cases, func(i, j int) bool {
+		if cases[i].Order != cases[j].Order {
+			return cases[i].Order < cases[j].Order
+		}
 		return cases[i].ID < cases[j].ID
 	})
 	return cases, nil
@@ -95,7 +99,7 @@ func (c *Catalog) Delete(id, category string) error {
 	if err != nil {
 		return err
 	}
-	return os.Remove(tc.SourcePath)
+	return c.moveToTrash(tc.SourcePath)
 }
 
 // Duplicate copies a test case within its category and returns the new case.
@@ -139,6 +143,9 @@ func (c *Catalog) DeleteCategory(category string) error {
 	if err != nil {
 		return err
 	}
+	if clean == "" {
+		return fmt.Errorf("cannot delete root catalog folder")
+	}
 	path := filepath.Join(c.root, filepath.FromSlash(clean))
 	if err := ensureInsideRoot(c.root, path); err != nil {
 		return err
@@ -153,7 +160,122 @@ func (c *Catalog) DeleteCategory(category string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("category is not a directory: %s", category)
 	}
-	return os.RemoveAll(path)
+	return c.moveToTrash(path)
+}
+
+func (c *Catalog) moveToTrash(sourcePath string) error {
+	now := time.Now()
+	dateStr := now.Format("2006-01-02")
+	timeStr := now.Format("150405")
+	
+	projectRoot := filepath.Dir(c.root)
+	trashDir := filepath.Join(projectRoot, "trash", dateStr)
+	
+	if err := os.MkdirAll(trashDir, 0o755); err != nil {
+		return err
+	}
+	
+	baseName := filepath.Base(sourcePath)
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+	
+	var newName string
+	if ext != "" {
+		newName = fmt.Sprintf("%s_%s%s", nameWithoutExt, timeStr, ext)
+	} else {
+		newName = fmt.Sprintf("%s_%s", baseName, timeStr)
+	}
+	
+	targetPath := filepath.Join(trashDir, newName)
+	return os.Rename(sourcePath, targetPath)
+}
+
+// CreateCategory creates a new category directory and adds a .gitkeep file.
+func (c *Catalog) CreateCategory(category string) error {
+	clean, err := cleanCategory(category)
+	if err != nil {
+		return err
+	}
+	if clean == "" {
+		return fmt.Errorf("cannot create root category explicitly")
+	}
+	path := filepath.Join(c.root, filepath.FromSlash(clean))
+	if err := ensureInsideRoot(c.root, path); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	// Write .gitkeep so git tracks the empty folder
+	return os.WriteFile(filepath.Join(path, ".gitkeep"), []byte(""), 0o644)
+}
+
+// ListCategories returns all category directories found inside the catalog root.
+func (c *Catalog) ListCategories() ([]string, error) {
+	var categories []string
+	err := filepath.WalkDir(c.root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		// skip the root itself
+		if path == c.root {
+			return nil
+		}
+		// ensure it's a valid category
+		rel, err := filepath.Rel(c.root, path)
+		if err != nil {
+			return nil
+		}
+		cat := filepath.ToSlash(rel)
+		if cat == "." || cat == "uncategorized" {
+			return nil
+		}
+		categories = append(categories, cat)
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	sort.Strings(categories)
+	return categories, nil
+}
+
+// Move moves a test case from one category to another.
+func (c *Catalog) Move(id, oldCategory, newCategory string) error {
+	tc, err := c.GetInCategory(id, oldCategory)
+	if err != nil {
+		return err
+	}
+	
+	cleanNew, err := cleanCategory(newCategory)
+	if err != nil {
+		return err
+	}
+	
+	newDir := filepath.Join(c.root, filepath.FromSlash(cleanNew))
+	if err := ensureInsideRoot(c.root, newDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return err
+	}
+	
+	newPath := filepath.Join(newDir, tc.ID+".json")
+	if err := ensureInsideRoot(c.root, newPath); err != nil {
+		return err
+	}
+	
+	if tc.SourcePath == newPath {
+		return nil // already there
+	}
+	
+	if err := os.Rename(tc.SourcePath, newPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Save writes tc as a JSON file under <root>/<category>/<id>.json.
@@ -183,10 +305,10 @@ func categoryFor(root, path string) (string, error) {
 
 func cleanCategory(category string) (string, error) {
 	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(category))))
-	if clean == "" || clean == "." || clean == "/" || clean == "uncategorized" {
-		return "", fmt.Errorf("invalid category: %s", category)
+	if clean == "" || clean == "." || clean == "uncategorized" {
+		return "", nil
 	}
-	if strings.HasPrefix(clean, "../") || clean == ".." || filepath.IsAbs(clean) {
+	if clean == "/" || strings.HasPrefix(clean, "../") || clean == ".." || filepath.IsAbs(clean) {
 		return "", fmt.Errorf("invalid category: %s", category)
 	}
 	return clean, nil

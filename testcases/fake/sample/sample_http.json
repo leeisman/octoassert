@@ -2,6 +2,7 @@
   "id": "sample_http",
   "name": "Sample: HTTP Request",
   "description": "啟動 fake HTTP server，驗證 http_request executor 的 GET / POST 行為。",
+  "order": 2,
   "config": {
     "timeout_ms": 10000
   },
@@ -9,6 +10,7 @@
     {
       "step_id": "1",
       "type": "fake_http_start",
+      "description": "start http",
       "action": {
         "port": 18081,
         "routes": [
@@ -31,13 +33,13 @@
           }
         ]
       },
+      "asserts": null,
       "exports": [
         {
           "path": "url",
           "as": "ctx.http_url"
         }
-      ],
-      "description": "start http"
+      ]
     },
     {
       "step_id": "2",
@@ -58,7 +60,8 @@
           "path": "body.pong",
           "expect": true
         }
-      ]
+      ],
+      "exports": null
     },
     {
       "step_id": "3",
@@ -96,10 +99,12 @@
     {
       "step_id": "4",
       "type": "fake_http_stop",
+      "description": "stop http",
       "action": {
         "url": "${ctx.http_url}"
       },
-      "description": "stop http"
+      "asserts": null,
+      "exports": null
     }
   ]
 }

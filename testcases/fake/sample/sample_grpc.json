@@ -2,6 +2,7 @@
   "id": "sample_grpc",
   "name": "Sample: gRPC Unary",
   "description": "啟動 fake gRPC server，驗證 grpc_unary executor 的 Echo / GetStatus 行為，並示範 export 取出回傳欄位。",
+  "order": 4,
   "config": {
     "timeout_ms": 10000
   },
@@ -9,6 +10,7 @@
     {
       "step_id": "1",
       "type": "fake_grpc_start",
+      "description": "start grpc",
       "action": {
         "port": 19091,
         "proto_files": [
@@ -24,13 +26,13 @@
           }
         }
       },
+      "asserts": null,
       "exports": [
         {
           "path": "addr",
           "as": "ctx.grpc_addr"
         }
-      ],
-      "description": "start grpc"
+      ]
     },
     {
       "step_id": "2",
@@ -89,15 +91,18 @@
           "path": "response.message",
           "expect": "world"
         }
-      ]
+      ],
+      "exports": null
     },
     {
       "step_id": "4",
       "type": "fake_grpc_stop",
+      "description": "stop grpc",
       "action": {
         "addr": "${ctx.grpc_addr}"
       },
-      "description": "stop grpc"
+      "asserts": null,
+      "exports": null
     }
   ]
 }

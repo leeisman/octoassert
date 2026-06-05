@@ -2,6 +2,7 @@
   "id": "sample_db_check",
   "name": "Sample: DB Check",
   "description": "示範 db_check executor 查 SQLite，驗證白盒狀態。測試會先建立本地 users fixture，再查詢資料。",
+  "order": 5,
   "config": {
     "timeout_ms": 10000
   },
@@ -9,9 +10,11 @@
     {
       "step_id": "1",
       "type": "include",
+      "description": "load config",
       "action": {
         "file_path": "config/fake.yaml"
       },
+      "asserts": null,
       "exports": [
         {
           "path": "db.driver",
@@ -21,8 +24,7 @@
           "path": "db.dsn",
           "as": "ctx.db_dsn"
         }
-      ],
-      "description": "load config"
+      ]
     },
     {
       "step_id": "2",
@@ -32,7 +34,9 @@
         "driver": "${ctx.db_driver}",
         "dsn": "${ctx.db_dsn}",
         "sql": "DROP TABLE IF EXISTS users"
-      }
+      },
+      "asserts": null,
+      "exports": null
     },
     {
       "step_id": "3",
@@ -42,7 +46,9 @@
         "driver": "${ctx.db_driver}",
         "dsn": "${ctx.db_dsn}",
         "sql": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"
-      }
+      },
+      "asserts": null,
+      "exports": null
     },
     {
       "step_id": "4",
@@ -56,7 +62,9 @@
           1,
           "alice"
         ]
-      }
+      },
+      "asserts": null,
+      "exports": null
     },
     {
       "step_id": "5",
@@ -95,7 +103,9 @@
       "description": "確認 export 正常後短暫等待",
       "action": {
         "duration_ms": 100
-      }
+      },
+      "asserts": null,
+      "exports": null
     }
   ]
 }

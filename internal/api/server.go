@@ -45,7 +45,10 @@ func (s *Server) Handler() http.Handler {
 	// API Routes
 	mux.HandleFunc("/api/testcases", s.handleTestCases)
 	mux.HandleFunc("/api/testcases/bulk-delete", s.handleBulkDeleteTestCases)
+	mux.HandleFunc("/api/testcases/bulk-move", s.handleBulkMoveTestCases)
+	mux.HandleFunc("/api/testcases/reorder", s.handleReorderTestCases)
 	mux.HandleFunc("/api/testcases/", s.handleTestCase)
+	mux.HandleFunc("/api/catalog/categories", s.handleCatalogCategoriesRoot)
 	mux.HandleFunc("/api/catalog/categories/", s.handleCatalogCategory)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/run", s.handleRun)
@@ -114,6 +117,68 @@ func (s *Server) handleBulkDeleteTestCases(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, map[string]int{"deleted": deleted})
 }
 
+func (s *Server) handleBulkMoveTestCases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Items []struct {
+			ID       string `json:"id"`
+			Category string `json:"category"`
+		} `json:"items"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "missing test cases")
+		return
+	}
+	moved := 0
+	for _, item := range req.Items {
+		if item.ID == "" {
+			continue
+		}
+		if err := s.catalog.Move(item.ID, item.Category, req.Target); err != nil {
+			continue // skip failures, move what we can
+		}
+		moved++
+	}
+	writeJSON(w, map[string]int{"moved": moved})
+}
+
+func (s *Server) handleReorderTestCases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Category string   `json:"category"`
+		IDs      []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	
+	changed := 0
+	for i, id := range req.IDs {
+		tc, err := s.catalog.GetInCategory(id, req.Category)
+		if err != nil {
+			continue // skip missing
+		}
+		if tc.Order != i {
+			tc.Order = i
+			_ = s.catalog.Save(tc, tc.Category)
+			changed++
+		}
+	}
+	writeJSON(w, map[string]int{"changed": changed})
+}
+
 func (s *Server) handleTestCase(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/testcases/")
 	if id == "" {
@@ -132,6 +197,27 @@ func (s *Server) handleTestCase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, tc)
+		return
+	}
+	if strings.HasSuffix(id, "/move") {
+		id = strings.TrimSuffix(id, "/move")
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Category string `json:"category"`
+			Target   string `json:"target"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.catalog.Move(id, req.Category, req.Target); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
 		return
 	}
 	switch r.Method {
@@ -153,6 +239,29 @@ func (s *Server) handleTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleCatalogCategoriesRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Category string `json:"category"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Category == "" {
+		writeError(w, http.StatusBadRequest, "missing category")
+		return
+	}
+	if err := s.catalog.CreateCategory(req.Category); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleCatalogCategory(w http.ResponseWriter, r *http.Request) {
 	category := strings.TrimPrefix(r.URL.Path, "/api/catalog/categories/")
 	var err error
@@ -165,15 +274,22 @@ func (s *Server) handleCatalogCategory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing category")
 		return
 	}
-	if r.Method != http.MethodDelete {
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.catalog.DeleteCategory(category); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	case http.MethodPost:
+		if err := s.catalog.CreateCategory(category); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	if err := s.catalog.DeleteCategory(category); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {

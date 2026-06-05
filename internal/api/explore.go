@@ -28,18 +28,10 @@ func (s *Server) handleExploreCategories(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	cases, err := s.catalog.List()
+	categories, err := s.catalog.ListCategories()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	seen := map[string]bool{}
-	var categories []string
-	for _, tc := range cases {
-		if tc.Category != "" && tc.Category != "uncategorized" && !seen[tc.Category] {
-			seen[tc.Category] = true
-			categories = append(categories, tc.Category)
-		}
 	}
 	writeJSON(w, categories)
 }

@@ -624,6 +624,11 @@ h1 {
 .code-container::-webkit-scrollbar { width: 8px; height: 8px; }
 .code-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
 
+.oa-move-folder-list::-webkit-scrollbar { width: 8px; }
+.oa-move-folder-list::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); border-radius: 4px; }
+.oa-move-folder-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+.oa-move-folder-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
 pre { margin: 0; }
 code {
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
@@ -1470,6 +1475,12 @@ code {
 ══════════════════════════════════════════ */
 .builder-ctx-wrap { flex-shrink: 0; }
 .builder-ctx-panel { padding: 10px 16px 12px; }
+
+/* Drag and Drop Indicators */
+.dragging { opacity: 0.5; }
+.drag-over-top { border-top: 2px solid var(--neon-primary); }
+.drag-over-bottom { border-bottom: 2px solid var(--neon-primary); }
+
 .builder-ctx-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .builder-ctx-rows { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 .builder-ctx-rows::-webkit-scrollbar { width: 4px; }

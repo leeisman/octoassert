@@ -6,6 +6,7 @@ type TestCase struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Order       int    `json:"order"`
 	Config      Config `json:"config"`
 	Steps       []Step `json:"steps"`
 	Category    string `json:"-"`
@@ -41,6 +42,7 @@ type Summary struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Order       int    `json:"order"`
 	Category    string `json:"category"`
 	SourcePath  string `json:"source_path"`
 }
@@ -50,6 +52,7 @@ func (tc TestCase) Summary() Summary {
 		ID:          tc.ID,
 		Name:        tc.Name,
 		Description: tc.Description,
+		Order:       tc.Order,
 		Category:    tc.Category,
 		SourcePath:  tc.SourcePath,
 	}

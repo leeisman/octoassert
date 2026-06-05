@@ -1,11 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
   const layout = document.getElementById('layout');
   const catalogToggle = document.getElementById('catalog-toggle');
+  const catalogAddFolderBtn = document.getElementById('catalog-add-folder-btn');
   const catalogExpandAllBtn = document.getElementById('catalog-expand-all-btn');
   const catalogCollapseAllBtn = document.getElementById('catalog-collapse-all-btn');
   const catalogSelectBtn = document.getElementById('catalog-select-btn');
   const catalogSelectBar = document.getElementById('catalog-select-bar');
   const catalogSelectedCount = document.getElementById('catalog-selected-count');
+  const catalogMoveSelected = document.getElementById('catalog-move-selected');
   const catalogDeleteSelected = document.getElementById('catalog-delete-selected');
   const catalogCancelSelect = document.getElementById('catalog-cancel-select');
   const treeContainer = document.getElementById('tree');
@@ -31,6 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let catalogSelectMode = false;
   let selectedCatalogItems = new Map();
   let testCaseJsonPristine = '';
+  let draggedTestCase = null;
+  let draggedStepId = null;
+  let tcOrder = 0;
 
   // Initialize
   initializeCatalogToggle();
@@ -48,8 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
   testCaseJsonOutput.addEventListener('scroll', syncRunnerJsonHighlightScroll);
   catalogExpandAllBtn.addEventListener('click', () => setAllCatalogFoldersCollapsed(false));
   catalogCollapseAllBtn.addEventListener('click', () => setAllCatalogFoldersCollapsed(true));
+  catalogAddFolderBtn.addEventListener('click', createNewFolder);
   catalogSelectBtn.addEventListener('click', () => setCatalogSelectMode(!catalogSelectMode));
   catalogCancelSelect.addEventListener('click', () => setCatalogSelectMode(false));
+  catalogMoveSelected.addEventListener('click', moveSelectedTestCases);
   catalogDeleteSelected.addEventListener('click', deleteSelectedTestCases);
 
   function initializeCatalogToggle() {
@@ -322,29 +329,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTestCases() {
     try {
-      const res = await fetch('/api/testcases');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const cases = await res.json();
-      renderTree(cases || []);
+      const [resCases, resCats] = await Promise.all([
+        fetch('/api/testcases'),
+        fetch('/api/explore/categories')
+      ]);
+      if (!resCases.ok) throw new Error(`HTTP ${resCases.status}`);
+      const cases = await resCases.json();
+      const cats = resCats.ok ? await resCats.json() : [];
+      renderTree(cases || [], cats || []);
     } catch (err) {
       treeContainer.innerHTML = `<div class="empty-state">Error loading test cases: ${err.message}</div>`;
     }
   }
 
-  function renderTree(cases) {
+  function renderTree(cases, allCategories = []) {
     treeContainer.innerHTML = '';
-    if (cases.length === 0) {
+    if (cases.length === 0 && allCategories.length === 0) {
       treeContainer.innerHTML = '<div class="empty-state">No test cases found.</div>';
       return;
     }
 
     // Build a tree structure based on category.
     const tree = {};
-    cases.forEach(tc => {
-      const parts = (tc.category || 'uncategorized').split('/').filter(Boolean);
-      if (parts.length === 0) parts.push('uncategorized');
-      
+    
+    // Ensure all known categories (even empty ones) are in the tree
+    allCategories.forEach(cat => {
+      if (!cat) return;
+      const parts = cat.split('/').filter(Boolean);
       let curr = tree;
+      parts.forEach((p, idx) => {
+        if (!curr[p]) curr[p] = { __cases: [], __category: parts.slice(0, idx + 1).join('/') };
+        curr = curr[p];
+      });
+    });
+
+    cases.forEach(tc => {
+      const parts = (tc.category || '').split('/').filter(Boolean);
+      let curr = tree;
+      if (!curr.__cases) curr.__cases = [];
+      
       parts.forEach((p, idx) => {
         if (!curr[p]) curr[p] = { __cases: [], __category: parts.slice(0, idx + 1).join('/') };
         curr = curr[p];
@@ -420,6 +443,77 @@ document.addEventListener('DOMContentLoaded', () => {
             showContextMenu(e, tc, item);
           };
           item.addEventListener('contextmenu', e => { e.preventDefault(); showContextMenu(e, tc, item); });
+          
+          // Drag and drop sorting
+          item.draggable = true;
+          item.dataset.id = tc.id;
+          item.dataset.category = tc.category || '';
+          
+          item.addEventListener('dragstart', e => {
+            if (catalogSelectMode) { e.preventDefault(); return; }
+            draggedTestCase = { id: tc.id, category: tc.category || '', element: item };
+            e.dataTransfer.effectAllowed = 'move';
+            setTimeout(() => item.classList.add('dragging'), 0);
+          });
+          
+          item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            draggedTestCase = null;
+            document.querySelectorAll('.test-case-item').forEach(el => {
+              el.classList.remove('drag-over-top', 'drag-over-bottom');
+            });
+          });
+          
+          item.addEventListener('dragover', e => {
+            if (catalogSelectMode || !draggedTestCase) return;
+            if (draggedTestCase.category !== (tc.category || '')) return; // only sort within same folder
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const rect = item.getBoundingClientRect();
+            if (e.clientY - rect.top < rect.height / 2) {
+              item.classList.add('drag-over-top');
+              item.classList.remove('drag-over-bottom');
+            } else {
+              item.classList.add('drag-over-bottom');
+              item.classList.remove('drag-over-top');
+            }
+          });
+          
+          item.addEventListener('dragleave', () => {
+            item.classList.remove('drag-over-top', 'drag-over-bottom');
+          });
+          
+          item.addEventListener('drop', async e => {
+            if (catalogSelectMode || !draggedTestCase) return;
+            if (draggedTestCase.category !== (tc.category || '')) return;
+            e.preventDefault();
+            
+            const isTop = item.classList.contains('drag-over-top');
+            item.classList.remove('drag-over-top', 'drag-over-bottom');
+            
+            if (draggedTestCase.id === tc.id) return;
+            
+            const parent = item.parentNode;
+            parent.insertBefore(draggedTestCase.element, isTop ? item : item.nextSibling);
+            
+            const ids = Array.from(parent.querySelectorAll('.test-case-item')).map(el => el.dataset.id);
+            try {
+              const res = await fetch('/api/testcases/reorder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ category: tc.category || '', ids })
+              });
+              if (!res.ok) throw new Error('Reorder failed');
+              // Optionally fetchTestCases() here, or just trust the DOM.
+              // fetchTestCases(); is safer to sync order.
+              fetchTestCases();
+            } catch (err) {
+              console.error(err);
+              fetchTestCases();
+            }
+          });
+
           childrenDiv.appendChild(item);
         });
       }
@@ -434,8 +528,121 @@ document.addEventListener('DOMContentLoaded', () => {
       return div;
     }
 
+    // Render root level items
+    if (tree.__cases) {
+      tree.__cases.forEach(tc => {
+        const item = document.createElement('div');
+        item.className = 'test-case-item';
+        item.classList.toggle('catalog-selecting', catalogSelectMode);
+        item.classList.toggle('selected', selectedCatalogItems.has(catalogItemKey(tc)));
+        item.innerHTML = `
+          <label class="tc-select-wrap" title="Select this test case">
+            <input class="tc-select-check" type="checkbox"${selectedCatalogItems.has(catalogItemKey(tc)) ? ' checked' : ''}>
+          </label>
+          <div class="tc-text">
+            <div class="tc-name"></div>
+            <div class="tc-id"></div>
+          </div>
+          <button class="tc-more-btn" type="button" title="More actions" aria-label="More test case actions">
+            <svg viewBox="0 0 24 24" fill="currentColor" class="icon"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+          </button>
+        `;
+        item.querySelector('.tc-name').textContent = tc.name;
+        item.querySelector('.tc-id').textContent = tc.id;
+        item.onclick = e => {
+          if (e.target.closest('.tc-more-btn') || e.target.closest('.tc-select-wrap')) return;
+          if (catalogSelectMode) {
+            toggleCatalogItem(tc);
+            return;
+          }
+          selectTestCase(tc.id, tc.name, item, tc.category);
+        };
+        item.querySelector('.tc-select-check').onchange = e => {
+          e.stopPropagation();
+          toggleCatalogItem(tc, e.target.checked);
+        };
+        item.querySelector('.tc-more-btn').onclick = e => {
+          e.stopPropagation();
+          showContextMenu(e, tc, item);
+        };
+        item.addEventListener('contextmenu', e => { e.preventDefault(); showContextMenu(e, tc, item); });
+
+        // Drag and drop for root level items
+        item.draggable = true;
+        item.dataset.id = tc.id;
+        item.dataset.category = tc.category || '';
+        
+        item.addEventListener('dragstart', e => {
+          if (catalogSelectMode) { e.preventDefault(); return; }
+          draggedTestCase = { id: tc.id, category: tc.category || '', element: item };
+          e.dataTransfer.effectAllowed = 'move';
+          setTimeout(() => item.classList.add('dragging'), 0);
+        });
+        
+        item.addEventListener('dragend', () => {
+          item.classList.remove('dragging');
+          draggedTestCase = null;
+          document.querySelectorAll('.test-case-item').forEach(el => {
+            el.classList.remove('drag-over-top', 'drag-over-bottom');
+          });
+        });
+        
+        item.addEventListener('dragover', e => {
+          if (catalogSelectMode || !draggedTestCase) return;
+          if (draggedTestCase.category !== (tc.category || '')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          
+          const rect = item.getBoundingClientRect();
+          if (e.clientY - rect.top < rect.height / 2) {
+            item.classList.add('drag-over-top');
+            item.classList.remove('drag-over-bottom');
+          } else {
+            item.classList.add('drag-over-bottom');
+            item.classList.remove('drag-over-top');
+          }
+        });
+        
+        item.addEventListener('dragleave', () => {
+          item.classList.remove('drag-over-top', 'drag-over-bottom');
+        });
+        
+        item.addEventListener('drop', async e => {
+          if (catalogSelectMode || !draggedTestCase) return;
+          if (draggedTestCase.category !== (tc.category || '')) return;
+          e.preventDefault();
+          
+          const isTop = item.classList.contains('drag-over-top');
+          item.classList.remove('drag-over-top', 'drag-over-bottom');
+          
+          if (draggedTestCase.id === tc.id) return;
+          
+          const parent = item.parentNode;
+          parent.insertBefore(draggedTestCase.element, isTop ? item : item.nextSibling);
+          
+          const ids = Array.from(parent.querySelectorAll('.test-case-item')).map(el => el.dataset.id);
+          try {
+            const res = await fetch('/api/testcases/reorder', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ category: tc.category || '', ids })
+            });
+            if (!res.ok) throw new Error('Reorder failed');
+            fetchTestCases();
+          } catch (err) {
+            console.error(err);
+            fetchTestCases();
+          }
+        });
+
+        treeContainer.appendChild(item);
+      });
+    }
+
     Object.keys(tree).forEach(k => {
-      treeContainer.appendChild(buildHtml(tree[k], k));
+      if (k !== '__cases' && k !== '__category') {
+        treeContainer.appendChild(buildHtml(tree[k], k));
+      }
     });
   }
 
@@ -464,6 +671,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const count = selectedCatalogItems.size;
     catalogSelectedCount.textContent = `${count} selected`;
     catalogDeleteSelected.disabled = count === 0;
+    catalogMoveSelected.disabled = count === 0;
+  }
+
+  async function moveSelectedTestCases() {
+    const items = [...selectedCatalogItems.values()];
+    if (!items.length) return;
+    openMoveModal(items);
   }
 
   async function deleteSelectedTestCases() {
@@ -509,6 +723,61 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function createNewFolder() {
+    const overlay = document.getElementById('oa-folder-modal-overlay');
+    const input = document.getElementById('oa-folder-input');
+    const cancelBtn = document.getElementById('oa-folder-cancel');
+    const confirmBtn = document.getElementById('oa-folder-confirm');
+
+    input.value = '';
+    overlay.style.display = 'flex';
+    input.focus();
+
+    return new Promise(resolve => {
+      const close = () => {
+        overlay.style.display = 'none';
+        confirmBtn.onclick = null;
+        cancelBtn.onclick = null;
+        resolve();
+      };
+
+      cancelBtn.onclick = close;
+      overlay.onclick = e => { if (e.target === overlay) close(); };
+
+      const submit = async () => {
+        const clean = input.value.trim();
+        if (!clean) return;
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Creating...';
+        try {
+          const res = await fetch('/api/catalog/categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: clean })
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            throw new Error(d.error || 'Create folder failed');
+          }
+          fetchTestCases();
+          showToast(`Created folder "${clean}"`);
+          close();
+        } catch (err) {
+          alert('Create folder failed: ' + err.message);
+        } finally {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Create';
+        }
+      };
+
+      confirmBtn.onclick = submit;
+      input.onkeydown = e => {
+        if (e.key === 'Enter') submit();
+        if (e.key === 'Escape') close();
+      };
+    });
+  }
+
   // ── Catalog item menu ──
   function initContextMenu() {
     const menu = document.getElementById('tc-context-menu');
@@ -548,6 +817,10 @@ document.addEventListener('DOMContentLoaded', () => {
       menu.style.display = 'none';
       duplicateTestCase(tc);
     };
+    menu.querySelector('.ctx-move').onclick = async () => {
+      menu.style.display = 'none';
+      openMoveModal(tc);
+    };
     menu.querySelector('.ctx-select').onclick = () => {
       menu.style.display = 'none';
       setCatalogSelectMode(true);
@@ -557,6 +830,106 @@ document.addEventListener('DOMContentLoaded', () => {
       menu.style.display = 'none';
       deleteTestCase(tc);
     };
+  }
+
+  async function openMoveModal(input) {
+    const isBulk = Array.isArray(input);
+    const items = isBulk ? input : [input];
+    if (!items.length) return;
+    
+    const overlay = document.getElementById('oa-move-modal-overlay');
+    const listEl = document.getElementById('oa-move-folder-list');
+    const cancelBtn = document.getElementById('oa-move-cancel');
+    const confirmBtn = document.getElementById('oa-move-confirm');
+    
+    listEl.innerHTML = '<div style="padding:10px;text-align:center;">Loading...</div>';
+    overlay.style.display = 'flex';
+    
+    const close = () => {
+      overlay.style.display = 'none';
+      confirmBtn.onclick = null;
+      cancelBtn.onclick = null;
+    };
+    
+    cancelBtn.onclick = close;
+    overlay.onclick = e => { if (e.target === overlay) close(); };
+    
+    try {
+      const res = await fetch('/api/explore/categories');
+      if (!res.ok) throw new Error('failed to load');
+      let cats = await res.json() || [];
+      // Always include root as an option
+      cats.unshift('');
+      
+      const currentCat = isBulk ? null : (input.category || '');
+      
+      listEl.innerHTML = cats.map(c => {
+        const displayLabel = c === '' ? '/ (root)' : c;
+        return `
+          <label style="display:block; padding:8px; cursor:pointer; border-radius:4px;" class="move-cat-item">
+            <input type="radio" name="move-target" value="${X(c)}" ${c === currentCat ? 'checked' : ''}>
+            <span style="margin-left:8px; color: ${c === currentCat ? 'var(--text-muted)' : 'inherit'}">${X(displayLabel)} ${c === currentCat ? '(current)' : ''}</span>
+          </label>
+        `;
+      }).join('');
+      
+      confirmBtn.onclick = async () => {
+        const checked = listEl.querySelector('input[name="move-target"]:checked');
+        if (!checked) return;
+        const target = checked.value;
+        if (!isBulk && target === currentCat) { close(); return; }
+        
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Moving...';
+        try {
+          if (isBulk) {
+            const res = await fetch('/api/testcases/bulk-move', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items, target: target })
+            });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              throw new Error(d.error || 'Bulk move failed');
+            }
+            showToast(`Moved ${items.length} test cases`);
+            if (currentTestCaseId) {
+               for (const it of items) {
+                  if (it.id === currentTestCaseId && (!currentTestCaseCategory || currentTestCaseCategory === it.category)) {
+                     currentTestCaseCategory = target;
+                  }
+               }
+            }
+            setCatalogSelectMode(false);
+          } else {
+            const tc = input;
+            const res = await fetch(`/api/testcases/${encodeURIComponent(tc.id)}/move`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ category: tc.category || '', target: target })
+            });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              throw new Error(d.error || 'Move failed');
+            }
+            if (currentTestCaseId === tc.id && (!currentTestCaseCategory || currentTestCaseCategory === tc.category)) {
+               currentTestCaseCategory = target;
+            }
+            showToast(`Moved ${tc.name} to ${target === '' ? 'root' : target}`);
+          }
+          fetchTestCases();
+          close();
+        } catch (err) {
+          alert('Move failed: ' + err.message);
+        } finally {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Move';
+        }
+      };
+      
+    } catch (err) {
+      listEl.innerHTML = `<div style="color:var(--neon-danger)">Failed to load categories: ${err.message}</div>`;
+    }
   }
 
   async function duplicateTestCase(tc) {
@@ -1297,15 +1670,19 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         e.dataTransfer.effectAllowed = 'move';
+        // Still set data for compatibility, but rely on draggedStepId
         e.dataTransfer.setData('text/plain', String(s._id));
+        draggedStepId = s._id;
         tab.classList.add('bldr-tab-dragging');
       });
       tab.addEventListener('dragend', () => {
+        draggedStepId = null;
         stepTabsEl.querySelectorAll('.bldr-step-tab').forEach(el => {
           el.classList.remove('bldr-tab-dragging', 'bldr-tab-drop-before', 'bldr-tab-drop-after');
         });
       });
       tab.addEventListener('dragover', e => {
+        if (!draggedStepId) return;
         e.preventDefault();
         const rect = tab.getBoundingClientRect();
         const before = e.clientX < rect.left + rect.width / 2;
@@ -1319,8 +1696,9 @@ document.addEventListener('DOMContentLoaded', () => {
         tab.classList.remove('bldr-tab-drop-before', 'bldr-tab-drop-after');
       });
       tab.addEventListener('drop', e => {
+        if (!draggedStepId) return;
         e.preventDefault();
-        const draggedId = Number(e.dataTransfer.getData('text/plain'));
+        const draggedId = draggedStepId;
         if (!draggedId || draggedId === s._id) return;
         const rect = tab.getBoundingClientRect();
         const before = e.clientX < rect.left + rect.width / 2;
@@ -1372,6 +1750,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tcSteps = [];
     stepSeq = 0;
     activeStepId = null;
+    tcOrder = 0;
     stepsEl.querySelectorAll('.builder-step-card').forEach(c => c.remove());
     stepTabsEl.innerHTML = '';
     emptyEl.style.display = '';
@@ -2246,6 +2625,7 @@ document.addEventListener('DOMContentLoaded', () => {
       id:          slugTC(document.getElementById('tc-name').value),
       name:        document.getElementById('tc-name').value.trim(),
       description: document.getElementById('tc-description').value.trim(),
+      order:       tcOrder,
       config:      { timeout_ms: +document.getElementById('tc-timeout').value || 30000 },
       steps:       tcSteps.map((step, index) => buildStepJSON(step, index)),
     };
@@ -2303,7 +2683,19 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Load a saved test case into the builder ──
-  window.loadInBuilder = function loadInBuilder(tc) {
+  window.loadInBuilder = function(tc) {
+    if (!tc) return;
+    document.getElementById('testcase-toggle').click(); // expand
+    if (layout.classList.contains('catalog-collapsed')) {
+      document.getElementById('catalog-toggle').click();
+    }
+    tcOrder = tc.order || 0;
+    document.getElementById('tc-name').value = tc.name || '';
+    document.getElementById('tc-description').value = tc.description || '';
+    document.getElementById('tc-category').value = tc.category || '';
+    document.getElementById('tc-timeout').value = tc.config?.timeout_ms || 30000;
+    categoryMenu.style.display = 'none';
+
     // Switch tab
     const builderTab = document.querySelector('[data-tab="builder"]');
     loadingBuilderFromEdit = true;

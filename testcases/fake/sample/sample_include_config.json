@@ -2,6 +2,7 @@
   "id": "sample_include_config",
   "name": "Sample: Include Config",
   "description": "示範從 config/fake.yaml 載入環境設定，再啟動 fake server，讓 test case 不 hardcode endpoint。",
+  "order": 3,
   "config": {
     "timeout_ms": 10000
   },
@@ -13,6 +14,7 @@
       "action": {
         "file_path": "config/fake.yaml"
       },
+      "asserts": null,
       "exports": [
         {
           "path": "http.base_url",
@@ -37,6 +39,7 @@
           }
         ]
       },
+      "asserts": null,
       "exports": [
         {
           "path": "url",
@@ -63,15 +66,18 @@
           "path": "body.ready",
           "expect": true
         }
-      ]
+      ],
+      "exports": null
     },
     {
       "step_id": "4",
       "type": "fake_http_stop",
+      "description": "stop http",
       "action": {
         "url": "${ctx.actual_url}"
       },
-      "description": "stop http"
+      "asserts": null,
+      "exports": null
     }
   ]
 }
