@@ -23,6 +23,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const testCaseJsonOutput = document.getElementById('testcase-json-output');
   const testCaseJsonHighlight = document.getElementById('testcase-json-highlight');
   const testCaseJsonSave = document.getElementById('testcase-json-save');
+  const runnerResultActions = document.querySelector('.step-result-actions');
+  const runnerResultOplogBtn = document.getElementById('runner-result-oplog-btn');
+  const runnerResultTreeBtn = document.getElementById('runner-result-tree-btn');
 
   const btnEditBuilder = document.getElementById('btn-edit-builder');
 
@@ -394,6 +397,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const header = document.createElement('div');
       header.className = 'folder-header';
       header.innerHTML = `
+        <label class="tc-select-wrap folder-select-wrap" title="Select all in folder" style="display:${catalogSelectMode?'flex':'none'};margin-right:8px;align-items:center">
+          <input class="tc-select-check folder-select-check" type="checkbox">
+        </label>
         <span class="folder-label">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-icon"><polyline points="9 18 15 12 9 6"></polyline></svg>
           <span class="folder-name"></span>
@@ -417,6 +423,36 @@ document.addEventListener('DOMContentLoaded', () => {
         e.stopPropagation();
         deleteFolder(category);
       };
+      
+      const folderCheck = header.querySelector('.folder-select-check');
+      folderCheck.onchange = e => {
+        e.stopPropagation();
+        const checked = e.target.checked;
+        const toggleAll = (n) => {
+          if (n.__cases) n.__cases.forEach(tc => toggleCatalogItem(tc, checked, false));
+          Object.keys(n).forEach(k => {
+            if (k !== '__cases' && k !== '__category') toggleAll(n[k]);
+          });
+        };
+        toggleAll(node);
+        updateCatalogSelectionUI();
+        fetchTestCases();
+      };
+      // Determine if all children are selected to check the folder box
+      let allChecked = true;
+      let hasCases = false;
+      const checkAll = (n) => {
+        if (n.__cases) {
+          if (n.__cases.length > 0) hasCases = true;
+          n.__cases.forEach(tc => { if (!selectedCatalogItems.has(catalogItemKey(tc))) allChecked = false; });
+        }
+        Object.keys(n).forEach(k => {
+          if (k !== '__cases' && k !== '__category') checkAll(n[k]);
+        });
+      };
+      checkAll(node);
+      folderCheck.checked = hasCases && allChecked;
+      
       div.appendChild(header);
 
       const childrenDiv = document.createElement('div');
@@ -675,12 +711,14 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${tc.category || ''}\u0000${tc.id}`;
   }
 
-  function toggleCatalogItem(tc, checked = !selectedCatalogItems.has(catalogItemKey(tc))) {
+  function toggleCatalogItem(tc, checked = !selectedCatalogItems.has(catalogItemKey(tc)), refresh = true) {
     const key = catalogItemKey(tc);
     if (checked) selectedCatalogItems.set(key, { id: tc.id, category: tc.category || '' });
     else selectedCatalogItems.delete(key);
-    updateCatalogSelectionUI();
-    fetchTestCases();
+    if (refresh) {
+      updateCatalogSelectionUI();
+      fetchTestCases();
+    }
   }
 
   function updateCatalogSelectionUI() {
@@ -1245,8 +1283,36 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const step = currentRunResult.steps[idx];
     if (step) {
-      showJson(buildStepRequestData(step), requestOutput);
-      showJson(buildStepResponseData(step), jsonOutput);
+      const reqDisp = buildStepRequestData(step);
+      const resDisp = buildStepResponseData(step);
+      showJson(reqDisp, requestOutput);
+      showJson(resDisp, jsonOutput);
+      const stepLogs = buildOperationLogData(step);
+      if (runnerResultActions) {
+        runnerResultActions.style.display = 'flex';
+        if (runnerResultOplogBtn) {
+          runnerResultOplogBtn.style.display = stepLogs.length ? 'inline-flex' : 'none';
+          runnerResultOplogBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+            ${step.type === 'websocket' ? 'Operation Log' : 'Step Log'}
+          `;
+          runnerResultOplogBtn.onclick = () => {
+            const allLogs = [];
+            currentRunResult.steps.forEach((s, sIdx) => {
+              buildOperationLogData(s).forEach((log, lIdx) => {
+                allLogs.push({ ...log, _sIdx: sIdx, tab_label: s.type === 'websocket' ? `Step ${sIdx+1} Op ${lIdx+1}` : `Step ${sIdx+1}` });
+              });
+            });
+            const activeIdx = allLogs.findIndex(l => l._sIdx === idx);
+            openOperationLogDialog(allLogs, 'Step Log', activeIdx >= 0 ? activeIdx : 0);
+          };
+        }
+        if (runnerResultTreeBtn) {
+          runnerResultTreeBtn.onclick = () => openJsonTreeDialog('Step Response', resDisp);
+        }
+      }
+    } else {
+      if (runnerResultActions) runnerResultActions.style.display = 'none';
     }
   }
 
@@ -1269,6 +1335,328 @@ document.addEventListener('DOMContentLoaded', () => {
       from: exp.path || exp.result,
       as: exp.as
     }));
+  }
+
+  /* ══════════════════════════════════════════
+     Batch Runner Logic
+  ══════════════════════════════════════════ */
+  const catalogBatchRunBtn = document.getElementById('catalog-batch-run-btn');
+  const batchTotal = document.getElementById('batch-total');
+  const batchPassed = document.getElementById('batch-passed');
+  const batchFailed = document.getElementById('batch-failed');
+  const batchPending = document.getElementById('batch-pending');
+  const batchProgress = document.getElementById('batch-progress');
+  const batchList = document.getElementById('batch-list');
+  const batchStopBtn = document.getElementById('batch-stop-btn');
+  const batchDetailPanel = document.getElementById('batch-detail-panel');
+
+  let batchState = {
+    running: false,
+    stopRequested: false,
+    queue: [], // array of testcase paths
+    results: new Map() // path -> result
+  };
+
+  if (catalogBatchRunBtn) {
+    catalogBatchRunBtn.addEventListener('click', () => {
+      const items = [];
+      selectedCatalogItems.forEach((item, key) => {
+        items.push(key);
+      });
+      if (items.length === 0) return;
+      startBatchRun(items);
+    });
+  }
+
+  function startBatchRun(paths) {
+    // Switch to batch tab
+    const batchTabBtn = document.querySelector('.tab-btn[data-tab="batch"]');
+    if (batchTabBtn) batchTabBtn.click();
+    
+    batchState.running = true;
+    batchState.stopRequested = false;
+    batchState.queue = [...paths];
+    batchState.results.clear();
+    
+    if (batchStopBtn) batchStopBtn.disabled = false;
+    if (batchStopBtn) batchStopBtn.textContent = 'Stop';
+    
+    renderBatchList();
+    updateBatchStats();
+    if (batchDetailPanel) batchDetailPanel.style.display = 'none';
+    
+    // start sequential execution
+    executeNextBatchItem();
+  }
+
+  batchStopBtn?.addEventListener('click', () => {
+    if (batchState.running) {
+      batchState.stopRequested = true;
+      batchStopBtn.disabled = true;
+      batchStopBtn.textContent = 'Stopping...';
+    }
+  });
+
+  async function executeNextBatchItem() {
+    const pendingIdx = batchState.queue.findIndex(p => !batchState.results.has(p));
+    if (pendingIdx === -1 || batchState.stopRequested) {
+      batchState.running = false;
+      if (batchStopBtn) {
+        batchStopBtn.disabled = true;
+        batchStopBtn.textContent = 'Stop';
+      }
+      updateBatchStats();
+      return;
+    }
+
+    const path = batchState.queue[pendingIdx];
+    const parts = path.split('\0');
+    const item = { category: parts[0], id: parts.slice(1).join('\0') };
+    
+    // mark as running
+    batchState.results.set(path, { status: 'running' });
+    updateBatchRow(path, pendingIdx);
+    
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson'
+        },
+        body: JSON.stringify({ id: item.id, category: item.category })
+      });
+      
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let finalResult = { status: 'failed', error: 'No complete event received' };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (value) buffer += decoder.decode(value, { stream: true });
+        
+        let newlineIdx;
+        while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+          if (!line) continue;
+          
+          try {
+            const ev = JSON.parse(line);
+            if (ev.type === 'complete') {
+              finalResult = ev.result;
+            }
+          } catch(e) {}
+        }
+        if (done) break;
+      }
+      batchState.results.set(path, finalResult);
+    } catch (e) {
+      batchState.results.set(path, { status: 'failed', error: String(e) });
+    }
+    
+    updateBatchRow(path, pendingIdx);
+    updateBatchStats();
+    
+    setTimeout(executeNextBatchItem, 100);
+  }
+
+  function updateBatchStats() {
+    let passed = 0, failed = 0, pending = 0;
+    batchState.queue.forEach(p => {
+      const r = batchState.results.get(p);
+      if (!r || r.status === 'running') pending++;
+      else if (r.status === 'passed') passed++;
+      else failed++;
+    });
+    
+    if (batchTotal) batchTotal.textContent = `${batchState.queue.length} Total`;
+    if (batchPassed) batchPassed.textContent = `${passed} Passed`;
+    if (batchFailed) batchFailed.textContent = `${failed} Failed`;
+    if (batchPending) batchPending.textContent = `${pending} Pending`;
+    
+    const done = passed + failed;
+    const pct = batchState.queue.length ? Math.round((done / batchState.queue.length) * 100) : 0;
+    if (batchProgress) batchProgress.style.width = `${pct}%`;
+  }
+
+  function renderBatchList() {
+    if (!batchList) return;
+    batchList.innerHTML = '';
+    batchState.queue.forEach((path, idx) => {
+      const div = document.createElement('div');
+      div.className = 'batch-row glass-inner';
+      div.id = `batch-row-${idx}`;
+      div.style.display = 'flex';
+      div.style.alignItems = 'center';
+      div.style.padding = '10px 16px';
+      div.style.cursor = 'pointer';
+      div.style.gap = '12px';
+      div.style.transition = 'background 0.2s';
+      
+      div.onclick = () => showBatchDetail(path, idx);
+      
+      batchList.appendChild(div);
+      updateBatchRow(path, idx);
+    });
+  }
+
+  function updateBatchRow(path, idx) {
+    const row = document.getElementById(`batch-row-${idx}`);
+    if (!row) return;
+    
+    const r = batchState.results.get(path);
+    const parts = path.split('\0');
+    const name = parts.slice(1).join('\0');
+    
+    let statusHtml = '<div style="width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,0.2)"></div>';
+    let timeHtml = '';
+    
+    row.style.borderLeft = '';
+    row.style.background = 'rgba(255,255,255,0.02)';
+    
+    if (r) {
+      if (r.status === 'running') {
+        statusHtml = '<div style="width:20px;height:20px;border-radius:50%;border:2px solid var(--neon-primary);border-top-color:transparent;animation:spin 1s linear infinite"></div>';
+        row.style.background = 'rgba(255,255,255,0.08)';
+      } else if (r.status === 'passed') {
+        statusHtml = '<svg viewBox="0 0 24 24" style="width:20px;height:20px;color:var(--neon-success)" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+        timeHtml = `<span style="color:var(--text-muted);font-size:12px">${r.elapsed_ms || 0} ms</span>`;
+        row.style.borderLeft = '4px solid var(--neon-success)';
+      } else {
+        statusHtml = '<svg viewBox="0 0 24 24" style="width:20px;height:20px;color:var(--neon-danger)" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+        timeHtml = `<span style="color:var(--text-muted);font-size:12px">${r.elapsed_ms || 0} ms</span>`;
+        row.style.borderLeft = '4px solid var(--neon-danger)';
+        row.style.background = 'rgba(244,63,94,0.05)';
+      }
+    }
+    
+    row.innerHTML = `
+      ${statusHtml}
+      <div style="flex:1;font-weight:500;color:#e2e8f0;word-break:break-all">${X(name)}</div>
+      ${timeHtml}
+    `;
+  }
+
+  function showBatchDetail(path, idx) {
+    try {
+      _showBatchDetail(path, idx);
+    } catch (e) {
+      console.error(e);
+      if (batchDetailPanel) {
+        batchDetailPanel.style.display = 'flex';
+        batchDetailPanel.innerHTML = '<div style="color:red;padding:20px;font-family:monospace;">ERROR: ' + e.message + '<br>' + e.stack + '</div>';
+      }
+    }
+  }
+
+  function _showBatchDetail(path, idx) {
+    document.querySelectorAll('.batch-row').forEach(r => {
+      if (!r.style.borderLeft) {
+        r.style.background = 'rgba(255,255,255,0.02)';
+      } else if (r.style.borderLeftColor === 'var(--neon-danger)') {
+        r.style.background = 'rgba(244,63,94,0.05)';
+      } else {
+        r.style.background = 'rgba(255,255,255,0.02)';
+      }
+    });
+    
+    const row = document.getElementById(`batch-row-${idx}`);
+    if (row) row.style.background = 'rgba(255,255,255,0.1)';
+    
+    const r = batchState.results.get(path);
+    if (!r || r.status === 'running') {
+      if (batchDetailPanel) batchDetailPanel.style.display = 'none';
+      return;
+    }
+    
+    if (batchDetailPanel) batchDetailPanel.style.display = 'flex';
+    
+    const parts = path.split('\0');
+    const item = { category: parts[0], id: parts.slice(1).join('\0') };
+    let html = `
+      <div style="padding:16px;border-bottom:1px solid rgba(255,255,255,0.1);flex-shrink:0;display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;font-size:16px;color:#fff">${X(item.id)} <span style="font-size:12px;color:#888;font-weight:normal">${X(item.category)}</span></h3>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <span class="badge ${r.status==='passed'?'badge-success':'badge-danger'}">${r.status.toUpperCase()}</span>
+            <span style="color:var(--text-muted);font-size:12px">${r.elapsed_ms||0} ms</span>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline batch-global-oplog-btn" type="button" style="display:none;align-items:center;gap:6px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+          Step Log
+        </button>
+      </div>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;flex:1;">
+    `;
+    
+    if (r.error) {
+      html += `<div class="bldr-result-error" style="padding:12px">${X(r.error)}</div>`;
+    }
+    
+    if (r.steps && r.steps.length > 0) {
+      r.steps.forEach((step, sIdx) => {
+        const ok = step.status === 'passed';
+        const resDisp = buildStepResponseData(step);
+        html += `
+          <div class="glass-inner" style="border-left:3px solid ${ok?'var(--neon-success)':'var(--neon-danger)'};padding:0;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,0.02);border-bottom:1px solid rgba(255,255,255,0.05);">
+              <div style="font-weight:600;font-size:13px">Step ${sIdx+1}: ${X(step.type)}</div>
+              <div style="display:flex;gap:8px">
+
+                <button class="btn btn-sm btn-outline batch-tree-btn" data-sidx="${sIdx}" type="button" style="display:flex;align-items:center;gap:6px">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/><path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/></svg>
+                  JSON Tree
+                </button>
+              </div>
+            </div>
+            <div class="code-container" style="max-height:300px;overflow-y:auto;margin:0;border-radius:0 0 6px 6px">
+              <pre><code class="batch-json-code" data-sidx="${sIdx}"></code></pre>
+            </div>
+          </div>
+        `;
+      });
+    }
+    
+    html += `</div>`;
+    if (batchDetailPanel) batchDetailPanel.innerHTML = html;
+    
+    if (r.steps && batchDetailPanel) {
+      // Build unified logs for all steps
+      const allLogs = [];
+      r.steps.forEach((s, sIdx) => {
+        const stepLogs = buildOperationLogData(s);
+        stepLogs.forEach((log, lIdx) => {
+          allLogs.push({
+            ...log,
+            _sIdx: sIdx,
+            tab_label: s.type === 'websocket' ? `Step ${sIdx+1} Op ${lIdx+1}` : `Step ${sIdx+1}`
+          });
+        });
+      });
+
+      r.steps.forEach((step, sIdx) => {
+        const resDisp = buildStepResponseData(step);
+        const codeEl = batchDetailPanel.querySelector(`.batch-json-code[data-sidx="${sIdx}"]`);
+        if (codeEl) hlJSON(resDisp, codeEl);
+        
+        const treeBtn = batchDetailPanel.querySelector(`.batch-tree-btn[data-sidx="${sIdx}"]`);
+        if (treeBtn) treeBtn.onclick = () => openJsonTreeDialog('Step Response', resDisp);
+      });
+      
+      if (allLogs.length > 0) {
+        const globalOpLogBtn = batchDetailPanel.querySelector('.batch-global-oplog-btn');
+        if (globalOpLogBtn) {
+          globalOpLogBtn.style.display = 'flex';
+          globalOpLogBtn.onclick = () => {
+            const preferredIdx = allLogs.findIndex(l => l.status === 'failed');
+            openOperationLogDialog(allLogs, 'Step Log', preferredIdx >= 0 ? preferredIdx : 0);
+          };
+        }
+      }
+    }
   }
 
   function buildStepResponseData(step) {
@@ -1319,8 +1707,10 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const tab = btn.dataset.tab;
+      const batchView = document.getElementById('batch-view');
       layout.style.display      = tab === 'runner'  ? '' : 'none';
       builderView.style.display = tab === 'builder' ? '' : 'none';
+      if (batchView) batchView.style.display = tab === 'batch' ? 'flex' : 'none';
       if (tab === 'builder') {
         loadBuilderCategories();
         if (!loadingBuilderFromEdit) resetBuilder();
@@ -2793,29 +3183,55 @@ document.addEventListener('DOMContentLoaded', () => {
         <span class="badge ${ok?'badge-success':'badge-danger'}">${ok?'PASSED':'FAILED'}</span>
         <span class="info-text">${result.elapsed_ms} ms</span>
         ${result.error ? `<span class="bldr-result-err-msg">${X(result.error)}</span>` : ''}
-        ${opLog.length ? `
-        <button class="icon-btn bldr-result-oplog-btn" type="button" title="Open operation log" aria-label="Open operation log">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon">
-            <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/>
-            <path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>
-          </svg>
-        </button>` : ''}
-        <button class="icon-btn bldr-result-tree-btn" type="button" title="Open JSON tree" aria-label="Open JSON tree">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon">
-            <path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/>
-            <path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/>
-          </svg>
-        </button>
+        <div style="display:flex;gap:8px;margin-left:auto">
+          ${opLog.length ? `
+          <button class="btn btn-sm btn-outline bldr-result-oplog-btn" type="button" style="display:flex;align-items:center;gap:6px;margin-left:0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px">
+              <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/>
+              <path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>
+            </svg>
+            ${result.type === 'websocket' ? 'Operation Log' : 'Step Log'}
+          </button>` : ''}
+          <button class="btn btn-sm btn-outline bldr-result-tree-btn" type="button" style="display:flex;align-items:center;gap:6px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px">
+              <path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/>
+              <path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/>
+            </svg>
+            JSON Tree
+          </button>
+        </div>
       </div>
       <div class="code-container bldr-result-code" style="margin:0 16px 12px;max-height:600px;overflow-y:auto">
         <pre><code class="bldr-result-json"></code></pre>
       </div>`;
+    
     hlJSON(disp, el.querySelector('.bldr-result-json'));
     el.querySelector('.bldr-result-tree-btn')?.addEventListener('click', () => {
       openJsonTreeDialog('Step Response', disp);
     });
     el.querySelector('.bldr-result-oplog-btn')?.addEventListener('click', () => {
-      openOperationLogDialog(opLog);
+      const allLogs = [];
+      let activeIdx = 0;
+      const stepsWithResult = tcSteps.filter(s => s.result);
+      
+      if (stepsWithResult.length === 0) {
+        openOperationLogDialog(opLog, result.type === 'websocket' ? 'Operation Log' : 'Step Log');
+        return;
+      }
+      
+      stepsWithResult.forEach((s, sIdx) => {
+        const stepLogs = buildOperationLogData(s.result);
+        stepLogs.forEach((log, lIdx) => {
+          const isTarget = s.result.step_id === result.step_id;
+          if (isTarget && activeIdx === 0) activeIdx = allLogs.length;
+          allLogs.push({
+            ...log,
+            _sIdx: sIdx,
+            tab_label: s.result.type === 'websocket' ? `Step ${sIdx+1} Op ${lIdx+1}` : `Step ${sIdx+1}`
+          });
+        });
+      });
+      openOperationLogDialog(allLogs, 'Step Log', activeIdx);
     });
   }
 
@@ -2824,6 +3240,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (Array.isArray(rawPayload?.operation_logs)) return rawPayload.operation_logs;
 
     const action = parseMaybeJson(result.request?.action);
+    if (result.type !== 'websocket') {
+      const raw = parseMaybeJson(result.raw_payload);
+      return [compactObject({
+        index: 1,
+        status: result.status,
+        id: result.step_id,
+        type: result.type,
+        description: result.description || result.request?.description,
+        payload: (raw !== undefined && raw !== null && raw !== '') ? raw : action?.payload,
+        response: parseMaybeJson(result.response_summary),
+        exports: result.request?.exports,
+        asserts: result.request?.asserts
+      })];
+    }
+
     const ops = Array.isArray(action?.operations) ? action.operations : [];
     return ops.map((op, index) => compactObject({
       index: index + 1,
@@ -2839,28 +3270,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }));
   }
 
-  function openOperationLogDialog(operations) {
+  function openOperationLogDialog(operations, title = 'Operation Log', activeIdx = 0) {
     const overlay = document.createElement('div');
     overlay.className = 'oa-json-tree-viewer-overlay';
     const tabs = operations.map((op, index) => `
-      <button class="oa-oplog-tab ${index === 0 ? 'active' : ''} ${op.disabled || op.status === 'skipped' ? 'skipped' : ''}" type="button" data-op-idx="${index}">
-        <span>#${op.index || index + 1}</span>
+      <button class="oa-oplog-tab ${index === activeIdx ? 'active' : ''} ${op.disabled || op.status === 'skipped' ? 'skipped' : ''} ${op.status === 'failed' ? 'failed' : ''}" type="button" data-op-idx="${index}">
+        <span>${X(op.tab_label || `#${op.index || index + 1}`)}</span>
         <strong>${X(op.type || 'op')}</strong>
         ${op.id ? `<code>${X(op.id)}</code>` : ''}
       </button>
     `).join('');
+    
+    // Hide tabs if there is only 1 operation (e.g. for Step Log)
+    const showTabs = operations.length > 1;
+
     overlay.innerHTML = `
-      <div class="oa-json-tree-viewer oa-oplog-viewer glass-panel" role="dialog" aria-modal="true" aria-label="Operation Log">
+      <div class="oa-json-tree-viewer oa-oplog-viewer glass-panel" role="dialog" aria-modal="true" aria-label="${X(title)}">
         <div class="oa-json-tree-viewer-head">
           <div>
-            <div class="oa-json-tree-viewer-title">Operation Log</div>
-            <div class="oa-json-tree-viewer-subtitle">Inspect each WebSocket operation with the actual runtime payload and timing.</div>
+            <div class="oa-json-tree-viewer-title">${X(title)}</div>
+            <div class="oa-json-tree-viewer-subtitle">Inspect execution details, payloads, and state data.</div>
           </div>
           <button class="icon-btn oa-json-tree-close" type="button" title="Close" aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <div class="oa-oplog-tabs">${tabs || '<div class="empty-state">No operations found.</div>'}</div>
+        ${showTabs ? `<div class="oa-oplog-tabs">${tabs}</div>` : ''}
         <div class="oa-oplog-body">
           <div class="oa-oplog-detail"></div>
         </div>
@@ -2894,7 +3329,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
     document.addEventListener('keydown', onKeydown);
-    renderOperation(0);
+    renderOperation(activeIdx);
   }
 
   function operationDetailHTML(op, index) {
@@ -2927,6 +3362,18 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="oa-oplog-section-title">Payload</div>
         <pre class="oa-oplog-json"><code>${hlJSONStr(payloadText)}</code></pre>
       ` : ''}
+      ${op.response ? `
+        <div class="oa-oplog-section-title">Response</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op.response, null, 2))}</code></pre>
+      ` : ''}
+      ${op.asserts && op.asserts.length > 0 ? `
+        <div class="oa-oplog-section-title">Asserts</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op.asserts, null, 2))}</code></pre>
+      ` : ''}
+      ${op.exports && op.exports.length > 0 ? `
+        <div class="oa-oplog-section-title">Exports</div>
+        <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op.exports, null, 2))}</code></pre>
+      ` : ''}
       ${op.match ? `
         <div class="oa-oplog-section-title">Match</div>
         <pre class="oa-oplog-json"><code>${hlJSONStr(JSON.stringify(op.match, null, 2))}</code></pre>
@@ -2953,7 +3400,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function formatRawMessages(messages) {
     if (!Array.isArray(messages) || !messages.length) return '';
-    return messages.map((message, index) => `// message ${index + 1}\n${message}`).join('\n\n');
+    return messages.map((m, index) => {
+      if (typeof m === 'object' && m !== null && m.time && m.msg) {
+        return `// message at ${formatOpTime(m.time)}\n${m.msg}`;
+      }
+      return `// message ${index + 1}\n${m}`;
+    }).join('\n\n');
   }
 
   function openJsonTreeDialog(title, value) {
@@ -3681,4 +4133,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function slugTC(name) {
     return name.toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')||'untitled';
   }
+
+  // Export functions to global scope so Batch Runner / Test Runner can use them
+  window.buildOperationLogData = buildOperationLogData;
+  window.openOperationLogDialog = openOperationLogDialog;
+  window.openJsonTreeDialog = openJsonTreeDialog;
+  window.hlJSON = hlJSON;
+  window.hlJSONStr = hlJSONStr;
 });

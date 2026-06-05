@@ -24,6 +24,10 @@ The current product shape is a local Web UI for catalog-driven, JSON-backed API 
 
 ## Recent Work To Preserve
 
+- Added unified `Step Log` dialog across all UI modes (Test Case Builder, Test Runner, Batch Runner).
+- Step Log displays Payload, Response (with gRPC code), Asserts, Exports, and per-operation WebSocket logs.
+- Moved Batch Runner and Test Runner UI logic to rely on the globally exported dialog functions.
+- Changed icon-only buttons to outline text buttons across the board for visual consistency.
 - Added typed context injection safeguards for `${ctx.roomid}` and compatibility for old `${ctx.ctx.roomid}` values.
 - Added WebSocket operation runtime log fields:
   - `payload_raw`
@@ -31,17 +35,15 @@ The current product shape is a local Web UI for catalog-driven, JSON-backed API 
   - `matched_message_raw`
   - `collected_messages_raw`
   - `elapsed_ms`
-- Added Operation Log dialog with operation tabs.
 - Added operation disable support in UI and executor.
-- Added tests for context injection and WebSocket payload ordering.
 
 ## Important Design Notes
 
+- The Step Log UI components must remain consistent across the three runner views (Test Runner, Batch Runner, Test Case Builder). Do not maintain separate HTML implementations.
 - Do not reintroduce older WebSocket step types such as `websocket_connect`, `websocket_send`, or `websocket_close`; current design is one `websocket` step with operations.
 - Do not display received WebSocket messages only through parsed/re-stringified JSON when protocol/debug order matters; prefer raw fields.
 - Do not generate `${ctx.ctx.xxx}` in UI autocomplete.
 - Do not silently fallback invalid JSON payloads to `{}`; validation should tell the user, except for supported unquoted context placeholders.
-- Do not hide successful empty WebSocket responses in Builder; result display should remain consistent with Test Runner.
 
 ## Reference Specs
 
@@ -55,5 +57,4 @@ The current product shape is a local Web UI for catalog-driven, JSON-backed API 
 ## Next Useful Follow-Ups
 
 - Add browser-level UI smoke tests for Builder WebSocket operation logs.
-- Consider surfacing operation runtime logs in Test Runner, not only Builder.
 - Continue keeping docs in sync whenever executor schema or UI behavior changes.

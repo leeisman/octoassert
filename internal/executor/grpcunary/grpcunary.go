@@ -122,7 +122,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	// 7. Process Response and Errors
 	responseBody := map[string]any{}
 	if respMsg != nil {
-		respBytes, marshalErr := respMsg.(*dynamic.Message).MarshalJSONPB(&jsonpb.Marshaler{EmitDefaults: true})
+		respBytes, marshalErr := respMsg.(*dynamic.Message).MarshalJSONPB(&jsonpb.Marshaler{EmitDefaults: true, OrigName: true})
 		if marshalErr == nil {
 			res.ResponseSummary = string(respBytes)
 			if len(respBytes) > 0 {

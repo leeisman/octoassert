@@ -189,25 +189,20 @@ The Web UI exposes this as a `Run` checkbox on each operation. Unchecking it sav
 
 For outbound WebSocket payloads, `Type` or `type` is ordered as the first JSON field before sending. This keeps runtime logs and protocol-sensitive systems aligned with expected payload order.
 
-## Operation Log
+## Step Log and Operation Log
 
-After running a WebSocket step in the builder, the Step Response header includes:
+Across the Test Runner, Batch Runner, and Test Case Builder, executing test cases produces a unified Step Log.
+You can open this log via the `Step Log` (or `Operation Log`) button.
 
-- Operation Log: tabbed per-operation runtime log.
-- Open JSON Tree: collapsible response viewer.
+The Step Log dialog provides a centralized, tabbed view for all steps in a run, containing:
 
-The Operation Log shows:
+- **Payload**: The exact JSON request sent.
+- **Response**: The raw response summary (e.g., gRPC code and JSON body).
+- **Asserts**: Test assertions configured for the step.
+- **Exports**: Extracted variables mapped to the context.
+- **Full Operation Log**: For WebSocket steps, a detailed timeline of sent messages, collected pushes, matched operations, and raw payloads.
 
-- operation id/type/status
-- start, sent, finish time
-- elapsed time
-- actual sent payload
-- match configuration
-- matched message
-- collected messages
-- full raw operation log JSON
-
-Collected and matched messages are displayed from raw WebSocket frames when available, so field order matches what was actually received instead of a re-stringified object.
+Collected and matched messages are displayed from raw WebSocket frames when available, ensuring field order matches what was actually received instead of a re-stringified object.
 
 ## Catalog And Builder
 

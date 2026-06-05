@@ -53,7 +53,7 @@ type WSOperationLog struct {
 	MatchedMessage         any               `json:"matched_message,omitempty"`
 	MatchedMessageRaw      string            `json:"matched_message_raw,omitempty"`
 	CollectedMessages      []any             `json:"collected_messages,omitempty"`
-	CollectedMessagesRaw   []string          `json:"collected_messages_raw,omitempty"`
+	CollectedMessagesRaw   any               `json:"collected_messages_raw,omitempty"`
 	CollectedMessagesCount int               `json:"collected_messages_count,omitempty"`
 	Error                  string            `json:"error,omitempty"`
 	Exports                []testcase.Export `json:"exports,omitempty"`
@@ -90,10 +90,11 @@ func matchMessage(msg string, m AwaitMatch) bool {
 }
 
 type WSContext struct {
-	conn     *websocket.Conn
-	msgQueue []string
-	mu       sync.Mutex
-	cancel   context.CancelFunc
+	conn      *websocket.Conn
+	msgQueue  []string
+	timeQueue []time.Time
+	mu        sync.Mutex
+	cancel    context.CancelFunc
 }
 
 // --- Executor ---
@@ -143,7 +144,12 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 		res.Error = fmt.Sprintf("dial failed: %v", err)
 		return res
 	}
-	defer conn.Close() // GUARANTEED CLEANUP!
+	defer func() {
+		// Send graceful close message to prevent EOF error on the server
+		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+		conn.WriteMessage(websocket.CloseMessage, closeMsg)
+		conn.Close()
+	}()
 
 	readCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -164,8 +170,10 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 				if err != nil {
 					return
 				}
+				now := time.Now()
 				wsc.mu.Lock()
 				wsc.msgQueue = append(wsc.msgQueue, string(msg))
+				wsc.timeQueue = append(wsc.timeQueue, now)
 				wsc.mu.Unlock()
 			}
 		}
@@ -271,13 +279,23 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 
 			wsc.mu.Lock()
 			collectedMsgs := wsc.msgQueue[:matchIdx+1]
+			collectedTimes := wsc.timeQueue[:matchIdx+1]
 			wsc.msgQueue = wsc.msgQueue[matchIdx+1:] // consume matched messages
+			wsc.timeQueue = wsc.timeQueue[matchIdx+1:]
 			wsc.mu.Unlock()
 
 			allMessages = append(allMessages, collectedMsgs...)
 			opLog.Status = "matched"
 			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
-			opLog.CollectedMessagesRaw = collectedMsgs
+			
+			rawLogs := make([]any, len(collectedMsgs))
+			for idx, msgStr := range collectedMsgs {
+				rawLogs[idx] = map[string]any{
+					"time": collectedTimes[idx].Format(time.RFC3339Nano),
+					"msg":  msgStr,
+				}
+			}
+			opLog.CollectedMessagesRaw = rawLogs
 			opLog.CollectedMessagesCount = len(collectedMsgs)
 			if len(collectedMsgs) > 0 {
 				matchedRaw := collectedMsgs[len(collectedMsgs)-1]
@@ -314,15 +332,24 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 			collectCancel()
 
 			wsc.mu.Lock()
-			collectedMsgs := make([]string, len(wsc.msgQueue))
-			copy(collectedMsgs, wsc.msgQueue)
+			collectedMsgs := wsc.msgQueue
+			collectedTimes := wsc.timeQueue
 			wsc.msgQueue = nil
+			wsc.timeQueue = nil
 			wsc.mu.Unlock()
 
 			allMessages = append(allMessages, collectedMsgs...)
 			opLog.Status = "collected"
 			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
-			opLog.CollectedMessagesRaw = collectedMsgs
+			
+			rawLogs := make([]any, len(collectedMsgs))
+			for idx, msgStr := range collectedMsgs {
+				rawLogs[idx] = map[string]any{
+					"time": collectedTimes[idx].Format(time.RFC3339Nano),
+					"msg":  msgStr,
+				}
+			}
+			opLog.CollectedMessagesRaw = rawLogs
 			opLog.CollectedMessagesCount = len(collectedMsgs)
 
 			// Per-operation exports (extract from the array of all collected messages)

@@ -1575,6 +1575,18 @@ code {
 }
 .oa-oplog-tab.skipped {
   border-color: rgba(245, 158, 11, 0.28);
+  opacity: 0.5;
+}
+.oa-oplog-tab.failed {
+  border-left-color: var(--neon-danger);
+  background: rgba(244,63,94,0.05);
+}
+.oa-oplog-tab.failed strong {
+  color: var(--neon-danger);
+}
+.oa-oplog-tab.failed:hover,
+.oa-oplog-tab.failed.active {
+  background: rgba(244,63,94,0.1);
 }
 .oa-oplog-tab span {
   font-size: 11px;

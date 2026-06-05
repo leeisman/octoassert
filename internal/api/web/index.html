@@ -42,6 +42,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
         Test Runner
       </button>
+      <button class="tab-btn" data-tab="batch">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        Batch Runner
+      </button>
       <button class="tab-btn" data-tab="builder">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
         Test Case Builder
@@ -75,12 +79,23 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
       </h2>
-      <div id="catalog-select-bar" class="catalog-select-bar" style="display:none">
-        <span id="catalog-selected-count">0 selected</span>
-        <button id="catalog-move-selected" class="btn btn-sm btn-accent" disabled>Move</button>
-        <button id="catalog-delete-selected" class="btn btn-sm oa-btn-danger" disabled>Delete</button>
-        <button id="catalog-cancel-select" class="btn btn-sm">Cancel</button>
-      </div>
+      <div class="catalog-select-bar" id="catalog-select-bar" style="display:none">
+          <div class="catalog-select-count" id="catalog-selected-count">0 selected</div>
+          <div class="catalog-select-actions">
+            <button id="catalog-batch-run-btn" class="icon-btn" type="button" title="Run Selected (Batch)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--neon-success)" stroke-width="2" class="icon"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            </button>
+            <button id="catalog-move-selected" class="icon-btn" type="button" title="Move Selected">
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--neon-primary)" stroke-width="2" class="icon"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3M2 12h20M12 2v20"/></svg>
+            </button>
+            <button id="catalog-delete-selected" class="icon-btn" type="button" title="Delete Selected">
+              <svg viewBox="0 0 24 24" fill="none" stroke="var(--neon-danger)" stroke-width="2" class="icon"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <button id="catalog-cancel-select" class="icon-btn" type="button" title="Cancel">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
       <div id="tree" class="tree-container">
         <div class="skeleton-line"></div>
         <div class="skeleton-line" style="width: 70%"></div>
@@ -140,7 +155,25 @@
               </div>
             </div>
             <div class="json-viewer glass-inner response-viewer">
-              <h3 class="inner-title">Step Result</h3>
+              <div class="inner-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <h3 class="inner-title" style="margin-bottom:0">Step Result</h3>
+                <div class="step-result-actions" style="display:none;gap:4px">
+                  <button id="runner-result-oplog-btn" class="btn btn-sm btn-outline" type="button" title="Open operation log" style="display:none;align-items:center;gap:6px">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px">
+                      <path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/>
+                      <path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>
+                    </svg>
+                    Operation Log
+                  </button>
+                  <button id="runner-result-tree-btn" class="btn btn-sm btn-outline" type="button" title="Open JSON tree" style="display:flex;align-items:center;gap:6px">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px">
+                      <path d="M3 3h6v6H3z"/><path d="M15 3h6v6h-6z"/><path d="M15 15h6v6h-6z"/>
+                      <path d="M9 6h3a3 3 0 0 1 3 3v6"/><path d="M12 18h3"/>
+                    </svg>
+                    JSON Tree
+                  </button>
+                </div>
+              </div>
               <div class="code-container">
                 <pre><code id="json-output">// Select an execution step to inspect response data...</code></pre>
               </div>
@@ -150,6 +183,43 @@
       </div>
     </section>
   </main>
+
+  <!-- ── Batch Runner View ── -->
+  <div class="container" id="batch-view" style="display:none;flex-direction:column;gap:16px;">
+    <div class="glass-panel batch-dashboard" style="padding:16px;">
+      <div class="batch-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="batch-title" style="display:flex;align-items:center;gap:16px;">
+          <h2 style="margin:0;font-size:18px;color:#fff;">Test Suite Execution</h2>
+          <div class="batch-stats" style="display:flex;gap:8px;">
+            <span class="badge" style="background:rgba(255,255,255,0.1);color:#fff" id="batch-total">0 Total</span>
+            <span class="badge badge-success" id="batch-passed">0 Passed</span>
+            <span class="badge badge-danger" id="batch-failed">0 Failed</span>
+            <span class="badge badge-primary" id="batch-pending">0 Pending</span>
+          </div>
+        </div>
+        <div class="batch-actions">
+          <button id="batch-stop-btn" class="btn btn-danger" type="button" disabled>Stop</button>
+        </div>
+      </div>
+      <div class="batch-progress-wrap" style="height:6px;background:rgba(255,255,255,0.05);border-radius:4px;overflow:hidden;position:relative;">
+        <div class="batch-progress-bar" id="batch-progress" style="width:0%;height:100%;background:var(--neon-success);transition:width 0.3s ease;"></div>
+      </div>
+    </div>
+
+    <div class="batch-split-layout" style="display:flex;flex:1;gap:16px;min-height:0;overflow:hidden;">
+      <!-- Left: Waterfall List -->
+      <div class="glass-panel batch-list-panel" style="flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:12px;">
+        <div id="batch-list" class="batch-list" style="display:flex;flex-direction:column;gap:8px;">
+          <!-- Rows injected here -->
+        </div>
+      </div>
+
+      <!-- Right: Detailed Result -->
+      <div class="glass-panel batch-detail-panel" id="batch-detail-panel" style="flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:0;display:none;">
+         <!-- Detail content populated by JS -->
+      </div>
+    </div>
+  </div>
 
   <!-- ── Test Case Builder View ── -->
   <div class="builder-container" id="builder-view" style="display:none">
@@ -321,6 +391,6 @@
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>
