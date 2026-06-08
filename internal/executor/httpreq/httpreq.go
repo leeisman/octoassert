@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"octoassert/internal/observability"
 	"octoassert/internal/runner"
 	"octoassert/internal/testcase"
 )
@@ -69,11 +70,14 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 		req.Header.Set(k, v)
 	}
 
+	observability.Info(ctx, "http_request_start", "method", action.Method, "url", action.URL, "payload_bytes", len(action.Payload))
+
 	resp, err := e.client.Do(req)
 	res.FinishedAt = time.Now()
 	res.ElapsedMS = res.FinishedAt.Sub(started).Milliseconds()
 
 	if err != nil {
+		observability.Error(ctx, "http_request_failed", "method", action.Method, "url", action.URL, "error", err)
 		res.Status = runner.StatusFailed
 		res.Error = "http request failed: " + err.Error()
 		return res
@@ -82,6 +86,8 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	res.ResponseSummary = responseSummary(resp.StatusCode, bodyBytes)
+
+	observability.Info(ctx, "http_request_done", "method", action.Method, "url", action.URL, "status_code", resp.StatusCode)
 
 	return res
 }

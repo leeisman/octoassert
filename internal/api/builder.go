@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"octoassert/internal/observability"
 	"octoassert/internal/testcase"
 )
 
@@ -37,7 +38,9 @@ func (s *Server) handleBuilderRunStep(w http.ResponseWriter, r *http.Request) {
 	if req.TimeoutMS > 0 {
 		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
 	}
+	runID := observability.GenerateRunID()
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx = observability.WithRunID(ctx, runID)
 	defer cancel()
 	result := s.runner.Run(ctx, tc)
 	if len(result.Steps) == 0 {
@@ -62,7 +65,9 @@ func (s *Server) handleBuilderRun(w http.ResponseWriter, r *http.Request) {
 		tc.ID = "_builder"
 	}
 	timeout := timeoutFor(tc)
+	runID := observability.GenerateRunID()
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx = observability.WithRunID(ctx, runID)
 	defer cancel()
 	result := s.runner.Run(ctx, tc)
 	writeJSON(w, result)

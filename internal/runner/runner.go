@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"octoassert/internal/observability"
 	"octoassert/internal/testcase"
 	"octoassert/pkg/jsonpath"
 )
@@ -32,10 +33,13 @@ func (r *Runner) RunWithCallback(ctx context.Context, tc testcase.TestCase, cb f
 func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, tc testcase.TestCase, cb func(int, string)) RunResult {
 	started := time.Now()
 	result := RunResult{
+		RunID:      observability.RunIDFromContext(ctx),
 		TestCaseID: tc.ID,
 		Status:     StatusPassed,
 		StartedAt:  started,
 	}
+
+	observability.Info(ctx, "run_start", "test_case_id", tc.ID)
 
 	for i, step := range tc.Steps {
 		if cb != nil {
@@ -54,7 +58,11 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 			step.Action = InjectContext(step.Action, runCtx)
 		}
 
-		stepResult := executor.Execute(ctx, runCtx, step)
+		stepCtx := observability.WithStepID(ctx, step.StepID)
+		observability.Info(stepCtx, "executor_start", "type", step.Type, "action", string(observability.Truncate(string(step.Action), 512)))
+
+		stepResult := executor.Execute(stepCtx, runCtx, step)
+		stepResult.RunID = result.RunID
 		stepResult.Request = &StepRequest{
 			Description: step.Description,
 			Action:      step.Action,
@@ -97,6 +105,8 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 			}
 		}
 
+		observability.Info(stepCtx, "executor_done", "status", string(stepResult.Status), "error", stepResult.Error, "elapsed_ms", stepResult.ElapsedMS)
+
 		result.Steps = append(result.Steps, stepResult)
 		if cb != nil {
 			if stepResult.Status == StatusPassed {
@@ -113,6 +123,13 @@ func (r *Runner) RunWithContext(ctx context.Context, runCtx *ExecutionContext, t
 
 	result.FinishedAt = time.Now()
 	result.ElapsedMS = result.FinishedAt.Sub(started).Milliseconds()
+
+	if result.Status == StatusPassed {
+		observability.Info(ctx, "run_done", "test_case_id", tc.ID, "elapsed_ms", result.ElapsedMS)
+	} else {
+		observability.Error(ctx, "run_failed", "test_case_id", tc.ID, "elapsed_ms", result.ElapsedMS)
+	}
+
 	return result
 }
 

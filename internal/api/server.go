@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"octoassert/internal/catalog"
+	"octoassert/internal/observability"
 	"octoassert/internal/runner"
 	"octoassert/internal/store"
 	"octoassert/internal/testcase"
@@ -323,7 +324,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	timeout := timeoutFor(tc)
+	runID := observability.GenerateRunID()
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx = observability.WithRunID(ctx, runID)
 	defer cancel()
 
 	flusher, isStreaming := w.(http.Flusher)

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"octoassert/internal/observability"
 	"octoassert/internal/runner"
 	"octoassert/internal/testcase"
 )
@@ -66,13 +67,16 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	res.RawPayload = action.Payload
 
 	// 1. Dial gRPC connection
+	observability.Info(ctx, "grpc_dial_start", "endpoint", action.Endpoint)
 	conn, err := grpc.NewClient(action.Endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
+		observability.Error(ctx, "grpc_dial_failed", "endpoint", action.Endpoint, "error", err)
 		res.Status = runner.StatusFailed
 		res.Error = "failed to dial endpoint: " + err.Error()
 		finish()
 		return res
 	}
+	observability.Info(ctx, "grpc_dial_done", "endpoint", action.Endpoint)
 	defer conn.Close()
 
 	// 2. Setup Reflection Client
@@ -114,6 +118,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	outCtx := metadata.NewOutgoingContext(ctx, md)
 
 	// 6. Invoke via grpcdynamic
+	observability.Info(ctx, "grpc_invoke_start", "service", action.Service, "method", action.Method, "payload_bytes", len(action.Payload))
 	stub := grpcdynamic.NewStub(conn)
 	respMsg, rpcErr := stub.InvokeRpc(outCtx, mtdDesc, reqMsg)
 
@@ -132,6 +137,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	}
 
 	if rpcErr != nil {
+		observability.Error(ctx, "grpc_invoke_failed", "service", action.Service, "method", action.Method, "error", rpcErr)
 		// Capture gRPC Status code and message
 		st, ok := status.FromError(rpcErr)
 		if ok {
@@ -158,6 +164,7 @@ func (e *Executor) Execute(ctx context.Context, _ *runner.ExecutionContext, step
 	} else {
 		// Successful call
 		// Also inject grpc_code: OK for unified assertions
+		observability.Info(ctx, "grpc_invoke_done", "service", action.Service, "method", action.Method, "grpc_code", "OK")
 		writeResponseSummary(&res, map[string]any{
 			"grpc_code": "OK",
 			"response":  responseBody,

@@ -13,6 +13,7 @@
 - **Runner / Executor 分工**：Runner Orchestrator 只負責步驟調度、上下文管理與結果彙整；不同 step 類型由對應 executor 執行。
 - **外部結果與內部狀態雙層驗證**：外部結果檢查（black-box check）驗證 API 回應與 WebSocket 推播；內部狀態檢查（white-box check）輔助確認 DB 或其他內部副作用。
 - **文件先行**：具體服務、API、test case schema、DB schema、UI layout、runner 流程與錯誤處理，先寫進 `docs/design/`，再進入實作。
+- **GJSON 查詢支援**：在 assert 與 export 擷取 JSON 時，全面支援 GJSON 語法。例如在陣列中找特定條件物件可用 `response.servers.#(type=="classical_baccarat").id`，避免寫死索引（如 `.0.id`）。
 - **少假設**：若服務行為不明確，文件要標示為待確認，不把猜測寫成事實。
 
 ## Memory Bank

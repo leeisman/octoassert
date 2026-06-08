@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"octoassert/internal/observability"
 	"octoassert/internal/runner"
 	"octoassert/internal/testcase"
 	"octoassert/pkg/jsonpath"
@@ -138,12 +139,15 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 		headers.Add(k, v)
 	}
 
+	observability.Info(ctx, "websocket_dial_start", "url", action.URL)
 	conn, _, err := websocket.DefaultDialer.Dial(action.URL, headers)
 	if err != nil {
+		observability.Error(ctx, "websocket_dial_failed", "url", action.URL, "error", err)
 		res.Status = runner.StatusFailed
 		res.Error = fmt.Sprintf("dial failed: %v", err)
 		return res
 	}
+	observability.Info(ctx, "websocket_dial_done", "url", action.URL)
 	defer func() {
 		// Send graceful close message to prevent EOF error on the server
 		closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
@@ -216,9 +220,13 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 			// Inject context mid-flight into payload
 			payloadBytes := runner.InjectContext(op.Payload, runCtx)
 			payloadBytes = orderJSONTypeFirst(payloadBytes)
+			
+			observability.Info(ctx, "websocket_send", "operation_id", op.ID, "payload_bytes", len(payloadBytes), "payload_raw", observability.RedactJSON(string(payloadBytes)))
+
 			opLog.PayloadRaw = string(payloadBytes)
 			opLog.Payload = parseJSONForLog(payloadBytes)
 			if err := conn.WriteMessage(websocket.TextMessage, payloadBytes); err != nil {
+				observability.Error(ctx, "websocket_send_failed", "operation_id", op.ID, "error", err)
 				res.Status = runner.StatusFailed
 				res.Error = fmt.Sprintf("op %d send failed: %v", i, err)
 				opLog.Status = "failed"
@@ -250,12 +258,34 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 				select {
 				case <-waitCtx.Done():
 					waitCancel()
+					observability.Warn(ctx, "websocket_await_timeout", "operation_id", op.ID)
 					res.Status = runner.StatusFailed
 					res.Error = fmt.Sprintf("op %d await timeout", i)
 					opLog.Status = "failed"
 					opLog.Error = res.Error
 					opLog.FinishedAt = time.Now()
 					opLog.ElapsedMS = opLog.FinishedAt.Sub(opLog.StartedAt).Milliseconds()
+					
+					// Capture whatever messages arrived during this time before returning
+					wsc.mu.Lock()
+					collectedMsgs := wsc.msgQueue
+					collectedTimes := wsc.timeQueue
+					wsc.msgQueue = nil
+					wsc.timeQueue = nil
+					wsc.mu.Unlock()
+
+					allMessages = append(allMessages, collectedMsgs...)
+					opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
+					rawLogs := make([]any, len(collectedMsgs))
+					for idx, msgStr := range collectedMsgs {
+						rawLogs[idx] = map[string]any{
+							"time": collectedTimes[idx].Format(time.RFC3339Nano),
+							"msg":  msgStr,
+						}
+					}
+					opLog.CollectedMessagesRaw = rawLogs
+					opLog.CollectedMessagesCount = len(collectedMsgs)
+
 					opLogs = append(opLogs, opLog)
 					attachOperationLogs()
 					return res
@@ -285,6 +315,8 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 			wsc.mu.Unlock()
 
 			allMessages = append(allMessages, collectedMsgs...)
+			observability.Info(ctx, "websocket_await_match", "operation_id", op.ID, "collected_count", len(collectedMsgs))
+
 			opLog.Status = "matched"
 			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
 			
@@ -339,6 +371,8 @@ func (e *Executor) Execute(ctx context.Context, runCtx *runner.ExecutionContext,
 			wsc.mu.Unlock()
 
 			allMessages = append(allMessages, collectedMsgs...)
+			observability.Info(ctx, "websocket_collect_done", "operation_id", op.ID, "collected_count", len(collectedMsgs))
+
 			opLog.Status = "collected"
 			opLog.CollectedMessages = rawMessagesForLog(collectedMsgs)
 			

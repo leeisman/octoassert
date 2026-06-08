@@ -5,9 +5,12 @@ import (
 	"os"
 
 	"octoassert/internal/consoleapp"
+	"octoassert/internal/observability"
 )
 
 func main() {
+	observability.InitLogger()
+
 	if len(os.Args) < 2 {
 		printHelp()
 		return

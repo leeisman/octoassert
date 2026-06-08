@@ -15,6 +15,7 @@ const (
 )
 
 type RunResult struct {
+	RunID      string       `json:"run_id,omitempty"`
 	TestCaseID string       `json:"test_case_id"`
 	Status     Status       `json:"status"`
 	StartedAt  time.Time    `json:"started_at"`
@@ -24,6 +25,7 @@ type RunResult struct {
 }
 
 type StepResult struct {
+	RunID           string          `json:"run_id,omitempty"`
 	StepID          string          `json:"step_id"`
 	Description     string          `json:"description,omitempty"`
 	Type            string          `json:"type"`

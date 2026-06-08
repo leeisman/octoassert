@@ -146,6 +146,17 @@ Later payloads can reference that value:
 }
 ```
 
+### GJSON Path Syntax
+The `path` used in exports and asserts uses GJSON syntax. This allows for powerful array filtering. For example, if you need to extract an ID from a specific server type in a list:
+
+```json
+{
+  "path": "response.servers.#(type==\"classical_baccarat\").id",
+  "as": "ctx.server_id"
+}
+```
+This syntax `.#(...)` finds the first element in the array where `type` equals `"classical_baccarat"`, and extracts its `.id`.
+
 The runner preserves the exported value type. If `ctx.roomid` is numeric, the sent payload will contain a numeric `Room`, not a string.
 
 In the Test Case Builder payload editor, unquoted context placeholders are also accepted for convenience:

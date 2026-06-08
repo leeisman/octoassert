@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const runnerResultActions = document.querySelector('.step-result-actions');
   const runnerResultOplogBtn = document.getElementById('runner-result-oplog-btn');
   const runnerResultTreeBtn = document.getElementById('runner-result-tree-btn');
+  const runTraceIdContainer = document.getElementById('run-trace-id-container');
 
   const btnEditBuilder = document.getElementById('btn-edit-builder');
 
@@ -107,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function highlightJsonText(text) {
-    const jsonTokenRe = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
+    const jsonTokenRe = /("(?:[^"\\]|\\.)*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
     let html = '';
     let lastIndex = 0;
     String(text ?? '').replace(jsonTokenRe, (match, ...args) => {
@@ -142,6 +143,18 @@ document.addEventListener('DOMContentLoaded', () => {
     container.appendChild(toast);
     window.setTimeout(() => toast.classList.add('leaving'), 2600);
     window.setTimeout(() => toast.remove(), 3100);
+  };
+
+  window.copyRunId = function(id, event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    navigator.clipboard.writeText(id).then(() => {
+      window.showToast('Run ID copied to clipboard', 'success');
+    }).catch(() => {
+      window.showToast('Failed to copy Run ID', 'error');
+    });
   };
 
   // ── Custom confirm modal ──
@@ -1245,6 +1258,14 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderRunResult(result) {
     infoBar.style.display = 'flex';
     runId.textContent = result.test_case_id;
+    if (runTraceIdContainer) {
+      if (result.run_id) {
+        runTraceIdContainer.innerHTML = `<span class="run-id-badge" style="font-size: 0.75rem; background: var(--bg-modifier-hover); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); user-select: all; cursor: pointer; color: var(--text-muted);" title="Copy Run ID" onclick="window.copyRunId('${X(result.run_id)}', event)">Run ID: ${X(result.run_id)} <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px;margin-left:2px;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span>`;
+        runTraceIdContainer.style.display = 'inline-flex';
+      } else {
+        runTraceIdContainer.style.display = 'none';
+      }
+    }
     runTime.textContent = result.elapsed_ms;
 
     runStatus.textContent = result.status;
@@ -1304,7 +1325,7 @@ document.addEventListener('DOMContentLoaded', () => {
               });
             });
             const activeIdx = allLogs.findIndex(l => l._sIdx === idx);
-            openOperationLogDialog(allLogs, 'Step Log', activeIdx >= 0 ? activeIdx : 0);
+            openOperationLogDialog(allLogs, 'Step Log', activeIdx >= 0 ? activeIdx : 0, currentRunResult?.run_id);
           };
         }
         if (runnerResultTreeBtn) {
@@ -1579,15 +1600,22 @@ document.addEventListener('DOMContentLoaded', () => {
       <div style="padding:16px;border-bottom:1px solid rgba(255,255,255,0.1);flex-shrink:0;display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
           <h3 style="margin:0;font-size:16px;color:#fff">${X(item.id)} <span style="font-size:12px;color:#888;font-weight:normal">${X(item.category)}</span></h3>
-          <div style="margin-top:8px;display:flex;gap:8px">
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
             <span class="badge ${r.status==='passed'?'badge-success':'badge-danger'}">${r.status.toUpperCase()}</span>
+            ${r.run_id ? `<span class="run-id-badge" style="font-size: 0.75rem; background: var(--bg-modifier-hover); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); user-select: all; cursor: pointer; color: var(--text-muted);" title="Copy Run ID" onclick="window.copyRunId('${X(r.run_id)}', event)">Run ID: ${X(r.run_id)} <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px;margin-left:2px;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span>` : ''}
             <span style="color:var(--text-muted);font-size:12px">${r.elapsed_ms||0} ms</span>
           </div>
         </div>
-        <button class="btn btn-sm btn-outline bldr-result-oplog-btn batch-global-oplog-btn" type="button" style="display:none;align-items:center;gap:6px;margin-left:0">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
-          Step Log
-        </button>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-sm btn-outline batch-jump-builder-btn" type="button" style="display:flex;align-items:center;gap:6px;margin-left:0" title="Edit in Test Case Builder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit in Builder
+          </button>
+          <button class="btn btn-sm btn-outline bldr-result-oplog-btn batch-global-oplog-btn" type="button" style="display:none;align-items:center;gap:6px;margin-left:0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon" style="width:14px;height:14px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+            Step Log
+          </button>
+        </div>
       </div>
       <div style="padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;flex:1;">
     `;
@@ -1652,9 +1680,25 @@ document.addEventListener('DOMContentLoaded', () => {
           globalOpLogBtn.style.display = 'flex';
           globalOpLogBtn.onclick = () => {
             const preferredIdx = allLogs.findIndex(l => l.status === 'failed');
-            openOperationLogDialog(allLogs, 'Step Log', preferredIdx >= 0 ? preferredIdx : 0);
+            openOperationLogDialog(allLogs, 'Step Log', preferredIdx >= 0 ? preferredIdx : 0, item.run_id);
           };
         }
+      }
+      
+      const jumpBtn = batchDetailPanel.querySelector('.batch-jump-builder-btn');
+      if (jumpBtn) {
+        jumpBtn.onclick = () => {
+          selectTestCase(item.id, item.id, null, item.category);
+          const wait = setInterval(() => {
+            if (currentTestCase && currentTestCase.id === item.id) {
+              clearInterval(wait);
+              if (window.loadInBuilder) window.loadInBuilder(currentTestCase);
+              const tabBtn = document.querySelector('.tab-btn[data-tab="builder"]');
+              if (tabBtn) tabBtn.click();
+            }
+          }, 80);
+          setTimeout(() => clearInterval(wait), 5000);
+        };
       }
     }
   }
@@ -3179,8 +3223,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const disp   = buildStepResponseData(result);
     const opLog  = buildOperationLogData(result);
     el.innerHTML = `
-      <div class="bldr-result-header" style="padding:8px 16px 6px">
+      <div class="bldr-result-header" style="padding:8px 16px 6px; align-items: center;">
         <span class="badge ${ok?'badge-success':'badge-danger'}">${ok?'PASSED':'FAILED'}</span>
+        ${result.run_id ? `<span class="run-id-badge" style="font-size: 0.75rem; background: var(--bg-modifier-hover); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); user-select: all; cursor: pointer; color: var(--text-muted);" title="Copy Run ID" onclick="window.copyRunId('${X(result.run_id)}', event)">Run ID: ${X(result.run_id)} <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px;margin-left:2px;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span>` : ''}
         <span class="info-text">${result.elapsed_ms} ms</span>
         ${result.error ? `<span class="bldr-result-err-msg">${X(result.error)}</span>` : ''}
         <div style="display:flex;gap:8px;margin-left:auto">
@@ -3215,7 +3260,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const stepsWithResult = tcSteps.filter(s => s.result);
       
       if (stepsWithResult.length === 0) {
-        openOperationLogDialog(opLog, result.type === 'websocket' ? 'Operation Log' : 'Step Log');
+        openOperationLogDialog(opLog, result.type === 'websocket' ? 'Operation Log' : 'Step Log', 0, result.run_id);
         return;
       }
       
@@ -3231,7 +3276,7 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         });
       });
-      openOperationLogDialog(allLogs, 'Step Log', activeIdx);
+      openOperationLogDialog(allLogs, 'Step Log', activeIdx, result.run_id);
     });
   }
 
@@ -3270,7 +3315,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }));
   }
 
-  function openOperationLogDialog(operations, title = 'Operation Log', activeIdx = 0) {
+  function openOperationLogDialog(operations, title = 'Operation Log', activeIdx = 0, runId = '') {
     const overlay = document.createElement('div');
     overlay.className = 'oa-json-tree-viewer-overlay';
     const tabs = operations.map((op, index) => `
@@ -3288,7 +3333,10 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="oa-json-tree-viewer oa-oplog-viewer glass-panel" role="dialog" aria-modal="true" aria-label="${X(title)}">
         <div class="oa-json-tree-viewer-head">
           <div>
-            <div class="oa-json-tree-viewer-title">${X(title)}</div>
+            <div class="oa-json-tree-viewer-title">
+              ${X(title)}
+              ${runId ? `<span class="run-id-badge" style="font-size: 0.75rem; background: var(--bg-modifier-hover); padding: 2px 6px; border-radius: 4px; margin-left: 8px; font-family: var(--font-mono); user-select: all; cursor: pointer;" title="Copy Run ID" onclick="window.copyRunId('${X(runId)}', event)">Run ID: ${X(runId)} <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px;margin-left:2px;vertical-align:middle"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></span>` : ''}
+            </div>
             <div class="oa-json-tree-viewer-subtitle">Inspect execution details, payloads, and state data.</div>
           </div>
           <button class="icon-btn oa-json-tree-close" type="button" title="Close" aria-label="Close">
@@ -3334,8 +3382,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function operationDetailHTML(op, index) {
     const status = op.status || (op.disabled ? 'skipped' : 'planned');
-    const payload = op.payload !== undefined ? op.payload : parseMaybeJson(op.payload_raw);
-    const payloadText = op.payload_raw || (payload !== undefined ? JSON.stringify(payload, null, 2) : '');
+    const payload = parseMaybeJson(op.payload !== undefined ? op.payload : op.payload_raw);
+    const payloadText = (typeof payload === 'object' && payload !== null)
+      ? JSON.stringify(payload, null, 2)
+      : (op.payload_raw || (payload !== undefined ? String(payload) : ''));
     const summaryRows = [
       ['Operation', `#${op.index || index + 1} ${String(op.type || '').toUpperCase()}`],
       ['Status', status],
@@ -3564,6 +3614,7 @@ document.addEventListener('DOMContentLoaded', () => {
           resultSection.style.display = '';
         }
         const resultEl = card.querySelector('.bldr-card-result');
+        sr.run_id = sr.run_id || runResult.run_id;
         renderStepResult(resultEl, sr);
         step.result = sr;
         if (sr.values) saveCtxValues(sr.values);
@@ -4050,7 +4101,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function hlJSON(obj, target) {
     const s = JSON.stringify(obj, null, 2);
     target.innerHTML = s.replace(
-      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      /("(?:[^"\\]|\\.)*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
       m => { let c='json-number'; if(/^"/.test(m)) c=/:$/.test(m)?'json-key':'json-string'; else if(/true|false/.test(m)) c='json-boolean'; else if(/null/.test(m)) c='json-null'; return `<span class="${c}">${m}</span>`; }
     );
   }
@@ -4061,10 +4112,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // HTML-escape first to prevent broken rendering
     const safe = str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     return safe.replace(
-      /("(?:\\u[0-9a-fA-F]{4}|\\[^u]|[^"\\])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      /("(?:[^"\\]|\\.)*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
       m => {
         let c = 'json-number';
-        if (/^"/.test(m))       c = /:\s*$/.test(m) ? 'json-key' : 'json-string';
+        if (/^"/.test(m))       c = /:$/.test(m) ? 'json-key' : 'json-string';
         else if (/^true$|^false$/.test(m)) c = 'json-boolean';
         else if (m === 'null')  c = 'json-null';
         return `<span class="${c}">${m}</span>`;
