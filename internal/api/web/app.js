@@ -1051,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function selectTestCase(id, name, element, category = null) {
     document.querySelectorAll('.test-case-item').forEach(el => el.classList.remove('active'));
-    element.classList.add('active');
+    element?.classList.add('active');
     
     currentTestCaseId = id;
     currentTestCaseCategory = category;
@@ -1687,17 +1687,20 @@ document.addEventListener('DOMContentLoaded', () => {
       
       const jumpBtn = batchDetailPanel.querySelector('.batch-jump-builder-btn');
       if (jumpBtn) {
-        jumpBtn.onclick = () => {
-          selectTestCase(item.id, item.id, null, item.category);
-          const wait = setInterval(() => {
-            if (currentTestCase && currentTestCase.id === item.id) {
-              clearInterval(wait);
-              if (window.loadInBuilder) window.loadInBuilder(currentTestCase);
-              const tabBtn = document.querySelector('.tab-btn[data-tab="builder"]');
-              if (tabBtn) tabBtn.click();
-            }
-          }, 80);
-          setTimeout(() => clearInterval(wait), 5000);
+        jumpBtn.onclick = async () => {
+          jumpBtn.disabled = true;
+          try {
+            const qs = item.category ? `?category=${encodeURIComponent(item.category)}` : '';
+            const res = await fetch(`/api/testcases/${encodeURIComponent(item.id)}${qs}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            if (item.category && !data.category) data.category = item.category;
+            window.loadInBuilder?.(data);
+          } catch (err) {
+            showToast(`Edit in Builder failed: ${err.message}`, 'error');
+          } finally {
+            jumpBtn.disabled = false;
+          }
         };
       }
     }
